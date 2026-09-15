@@ -1,0 +1,15 @@
+.env.example
+.gitignore
+README.md
+package.json
+package-lock.json
+.githooks\pre-push
+demo\index.html
+demo\runner.js
+demo\server.js
+src\mcp-server.js
+examples\analyse.js
+examples\budget.js
+examples\budget.test.js
+examples\keys.js
+examples\zendiq-client.js

@@ -1,0 +1,23 @@
+{
+  "name": "zendiq-agent-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open integration surface for ZendIQ's agent-facing Solana swap triage API",
+  "scripts": {
+    "analyse": "node examples/analyse.js",
+    "budget:init": "node examples/budget.js init 1.00",
+    "demo": "node demo/server.js",
+    "demo:check": "node demo/runner.js --check",
+    "demo:run": "node demo/runner.js",
+    "mcp": "node src/mcp-server.js",
+    "test": "node examples/budget.test.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "@solana/kit": "5.5.1",
+    "@x402/core": "2.22.0",
+    "@x402/svm": "2.22.0"
+  }
+}

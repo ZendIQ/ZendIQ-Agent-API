@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+if command -v gitleaks >/dev/null 2>&1; then
+  exec gitleaks detect --source . --redact --no-banner
+fi
+
+if command -v trufflehog >/dev/null 2>&1; then
+  exec trufflehog git file://. --fail --no-update
+fi
+
+echo "Push blocked: install gitleaks or trufflehog and run the secret scan." >&2
+exit 1
