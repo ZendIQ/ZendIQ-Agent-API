@@ -8,8 +8,11 @@ demo\index.html
 demo\runner.js
 demo\server.js
 src\mcp-server.js
+examples\agent.test.js
 examples\analyse.js
 examples\budget.js
 examples\budget.test.js
+examples\feed.js
 examples\keys.js
+examples\watch.js
 examples\zendiq-client.js

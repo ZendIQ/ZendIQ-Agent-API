@@ -236,7 +236,8 @@ module.exports = { BudgetLedger, BudgetExceededError };
 
 if (require.main === module) {
   const network = process.env.AGENT_NETWORK ?? 'devnet';
-  const file = process.env.AGENT_BUDGET_FILE ?? path.join(__dirname, `budget-${network}.json`);
+  const stateDir = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
+  const file = process.env.AGENT_BUDGET_FILE ?? path.join(stateDir, `budget-${network}.json`);
   const [cmd, arg] = process.argv.slice(2);
   if (cmd === 'init') {
     const ledger = BudgetLedger.init(file, Number(arg ?? '1'), network);

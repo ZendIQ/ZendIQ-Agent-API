@@ -9,8 +9,10 @@
     "demo": "node demo/server.js",
     "demo:check": "node demo/runner.js --check",
     "demo:run": "node demo/runner.js",
+    "feed": "node examples/feed.js",
     "mcp": "node src/mcp-server.js",
-    "test": "node examples/budget.test.js"
+    "test": "node --test examples/*.test.js",
+    "watch": "node examples/watch.js"
   },
   "engines": {
     "node": ">=22.5.0"

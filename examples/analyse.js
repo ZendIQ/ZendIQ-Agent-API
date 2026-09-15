@@ -7,7 +7,7 @@
  * discovers the price from a 402, decides whether it can afford it, pays, and reads
  * a verdict back. Execution comes next; this proves the paid path.
  *
- * Run: node agent/analyse.js
+ * Run: npm --prefix agent run analyse
  */
 
 const path = require('node:path');
@@ -19,7 +19,8 @@ const NETWORK = process.env.AGENT_NETWORK ?? 'devnet';
 const BASE_URL = process.env.ZENDIQ_API_URL ?? 'http://127.0.0.1:3111';
 const RPC_URL = process.env.AGENT_RPC_URL
   ?? (NETWORK === 'mainnet' ? 'https://api.mainnet-beta.solana.com' : 'https://api.devnet.solana.com');
-const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(__dirname, `budget-${NETWORK}.json`);
+const STATE_DIR = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
+const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(STATE_DIR, `budget-${NETWORK}.json`);
 
 // SOL -> BONK: a memecoin output, so the verdict exercises the token-class path
 // that §12.2.1 made the primary Protect trigger.
@@ -36,7 +37,7 @@ const SWAP = {
     budget = BudgetLedger.load(BUDGET_FILE, NETWORK);
   } catch (err) {
     console.error(`\n${err.message}\n`);
-    console.error(`  AGENT_NETWORK=${NETWORK} node agent/budget.js init 1.00\n`);
+    console.error(`  AGENT_NETWORK=${NETWORK} npm --prefix agent run budget:init -- 1.00\n`);
     process.exit(1);
   }
 

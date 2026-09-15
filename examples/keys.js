@@ -23,7 +23,8 @@ const { createKeyPairSignerFromPrivateKeyBytes } = require('@solana/kit');
  */
 async function loadAgentSigner(opts = {}) {
   const network = opts.network ?? 'devnet';
-  const file = opts.file ?? path.join(__dirname, `agent-${network}.key.json`);
+  const stateDir = opts.stateDir ?? process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
+  const file = opts.file ?? path.join(stateDir, `agent-${network}.key.json`);
   const seedEnv = opts.seedEnv ?? 'AGENT_SECRET_SEED';
 
   const fromEnv = (process.env[seedEnv] ?? '').trim();

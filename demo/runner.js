@@ -23,8 +23,9 @@ const SWAP = {
   amount: valueFor('--amount', '500000000'),
   slippageBps: Number(valueFor('--slippage', '100')),
 };
-const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(__dirname, '..', 'examples', `budget-${NETWORK}.json`);
-const KEY_FILE = path.join(__dirname, '..', 'examples', `agent-${NETWORK}.key.json`);
+const STATE_DIR = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
+const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(STATE_DIR, `budget-${NETWORK}.json`);
+const KEY_FILE = process.env.ZENDIQ_AGENT_KEYPAIR ?? path.join(STATE_DIR, `agent-${NETWORK}.key.json`);
 
 async function emit(type, transport, data) {
   const response = await fetch(EVENT_URL, {

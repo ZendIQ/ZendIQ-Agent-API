@@ -8,7 +8,8 @@ This repository contains the complete agent-facing integration surface:
 
 - MCP server for `zendiq_triage_swap`
 - x402 payment client
-- Example agent with a hard local spend ceiling
+- Autonomous candidate feed and triage loop
+- Decision ledger with a hard local spend ceiling
 - Public request and response contract
 - Devnet-first configuration
 
@@ -43,6 +44,20 @@ npm run analyse
 ```
 
 The example defaults to devnet, generates its own throwaway key on first run, and uses a `$1.00` local budget. Fund the printed address with devnet USDC before making the paid call. Nothing defaults to ZendIQ production infrastructure.
+
+## Autonomous agent
+
+The complete test agent is public under `examples/`. It watches DexScreener's live Solana boost feed, enriches each candidate, pays ZendIQ for a verdict, and records whether it would refuse, protect, or route the trade normally.
+
+```powershell
+npm run budget:init
+npm run feed
+npm run watch
+```
+
+`watch` begins with USDC as a control, so a run proves that the agent discriminates rather than refusing everything. It then prints a run ledger containing triage spend, refused candidates, protected candidates, and candidates cleared for direct routing.
+
+Trade execution is intentionally not wired in this version. The agent reports the recommended path and fees it would use without claiming that money moved. Keys and budget ledgers live under the gitignored `runtime/` directory.
 
 ## Demo visualizer
 
