@@ -16,7 +16,7 @@ const { loadAgentSigner } = require('./keys');
 const { ZendIQClient } = require('./zendiq-client');
 
 const NETWORK = process.env.AGENT_NETWORK ?? 'devnet';
-const BASE_URL = process.env.ZENDIQ_API_URL ?? 'http://127.0.0.1:3111';
+const BASE_URL = process.env.ZENDIQ_API_URL ?? 'http://127.0.0.1:3000';
 const RPC_URL = process.env.AGENT_RPC_URL
   ?? (NETWORK === 'mainnet' ? 'https://api.mainnet-beta.solana.com' : 'https://api.devnet.solana.com');
 const STATE_DIR = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');

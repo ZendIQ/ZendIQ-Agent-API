@@ -69,7 +69,7 @@ class ZendIQClient {
    * @param {object} opts - `signer`, `budget`, `baseUrl`, `network`, `rpcUrl`.
    */
   constructor(opts) {
-    this.baseUrl = (opts.baseUrl ?? 'http://127.0.0.1:3111').replace(/\/$/, '');
+    this.baseUrl = (opts.baseUrl ?? 'http://127.0.0.1:3000').replace(/\/$/, '');
     this.budget = opts.budget;
     this.network = opts.network ?? 'devnet';
     this.onEvent = typeof opts.onEvent === 'function' ? opts.onEvent : () => {};
@@ -163,7 +163,7 @@ class ZendIQClient {
     const settlement = decodeHeader(response.headers.get('PAYMENT-RESPONSE'));
     const replayed = body?.replayed === true;
     if (response.ok) {
-      await this.onEvent('payment_settled', { priceUsd: replayed ? 0 : priceUsd, replayed });
+      await this.onEvent('payment_settled', { priceUsd: replayed ? 0 : priceUsd, replayed, tx: settlement?.transaction || null });
       await this.onEvent('analysis_completed', {
         verdict: body.verdict,
         score: body.tokenRisk?.score ?? null,

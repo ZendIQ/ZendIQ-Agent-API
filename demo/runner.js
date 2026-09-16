@@ -7,7 +7,7 @@ const { loadAgentSigner } = require('../examples/keys');
 const { ZendIQClient } = require('../examples/zendiq-client');
 
 const NETWORK = process.env.AGENT_NETWORK ?? 'devnet';
-const BASE_URL = process.env.ZENDIQ_API_URL ?? 'http://127.0.0.1:3111';
+const BASE_URL = process.env.ZENDIQ_API_URL ?? 'http://127.0.0.1:3000';
 const RPC_URL = process.env.AGENT_RPC_URL
   ?? (NETWORK === 'mainnet' ? 'https://api.mainnet-beta.solana.com' : 'https://api.devnet.solana.com');
 const EVENT_URL = process.env.ZENDIQ_DEMO_EVENTS_URL ?? 'http://127.0.0.1:4173/api/events';
@@ -42,6 +42,9 @@ async function preflight() {
   ]);
   if (!manifest.ok) throw new Error(`Agent API preflight failed: HTTP ${manifest.status}`);
   if (!visualizer.ok) throw new Error(`Visualizer preflight failed: HTTP ${visualizer.status}`);
+  if (!require('node:fs').existsSync(BUDGET_FILE)) {
+    BudgetLedger.init(BUDGET_FILE, 1.00, NETWORK);
+  }
   BudgetLedger.load(BUDGET_FILE, NETWORK);
   await loadAgentSigner({ network: NETWORK, file: KEY_FILE });
   console.log(`Preflight passed: ${BASE_URL} · ${NETWORK} · visualizer connected`);

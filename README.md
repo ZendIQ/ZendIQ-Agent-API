@@ -29,7 +29,7 @@ This repository contains no extension analytics, user telemetry, production depl
 npm ci
 Copy-Item .env.example .env
 $env:ZENDIQ_AGENT_KEYPAIR = 'C:\path\to\devnet-keypair.json'
-$env:ZENDIQ_AGENT_URL = 'http://127.0.0.1:3111'
+$env:ZENDIQ_AGENT_URL = 'http://127.0.0.1:3000'
 npm run mcp
 ```
 
@@ -61,20 +61,53 @@ Trade execution is intentionally not wired in this version. The agent reports th
 
 ## Demo visualizer
 
-Start the local spectator view:
+A local spectator view that renders one real swap-triage call as a live, animated sequence across two transports side by side — the MCP agent tool and the direct x402 HTTP rail — then verifies that both returned the same evidence fingerprint. Every value on screen is real: live risk score, real `$0.01` USDC settlement, real response. Nothing is staged.
+
+### Prerequisites
+
+- Node.js 22.5+ and `npm ci` already run.
+- A reachable ZendIQ Agent API endpoint (set `ZENDIQ_AGENT_URL`; defaults to `http://127.0.0.1:3000`).
+- A devnet keypair funded with **USDC** — see funding below. **No SOL is required.**
+
+### Step 1 — create the demo wallet
+
+The runner signs with a throwaway devnet key at `runtime/agent-devnet.key.json`. Generate it and print its public address (no servers needed for this step):
+
+```powershell
+node -e "const p=require('path');require('./examples/keys').loadAgentSigner({network:'devnet',file:p.join('runtime','agent-devnet.key.json')}).then(k=>console.log('Fund this address:',k.address))"
+```
+
+The key never leaves `runtime/` (gitignored). It signs USDC payment authorizations only.
+
+### Step 2 — fund it with devnet USDC (no SOL needed)
+
+The x402 facilitator sponsors the network fee, so the wallet only needs USDC, not SOL. Get devnet USDC from Circle's faucet — it also creates the token account for you:
+
+1. Open <https://faucet.circle.com>
+2. Select network **Solana Devnet**
+3. Paste the address from Step 1 and request (10 USDC = ~1,000 calls at `$0.01` each)
+
+### Step 3 — run it
+
+Start the visualizer in one terminal:
 
 ```powershell
 npm run demo
 ```
 
-Open `http://127.0.0.1:4173`, then use a second terminal:
+Open `http://127.0.0.1:4173`, then in a second terminal:
 
 ```powershell
-npm run demo:check
 npm run demo:run -- --mint DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
 ```
 
-The runner sends the same live request through MCP and direct x402 HTTP. The page renders the real payment and analysis events, then verifies that both transports returned the same evidence fingerprint. The event stream deliberately excludes payment authorizations, secrets, RPC URLs, and complete wallet addresses.
+Both lanes fill in — request → `402` → USDC authorization signed → payment settled → analysis returned — and the footer shows **Verified · identical evidence** with the shared fingerprint. The runner exits `0` on a fingerprint match, non-zero on mismatch. The event stream deliberately excludes payment authorizations, secrets, RPC URLs, and complete wallet addresses.
+
+### Troubleshooting
+
+- **`Preflight failed` / `fetch failed`** — the runner needs both the Agent API and the visualizer (`npm run demo`) up at the same time. Start the visualizer first and leave it running.
+- **`Payment was rejected`** — the wallet holds no devnet USDC (fund it, Step 2), or, if you run your own endpoint, the endpoint's `payTo` address has no USDC token account. The x402 settlement is an SPL transfer, so the destination must already have an account for that mint; the facilitator does not create it. Point `payTo` at an address that already holds that USDC, or create its token account once.
+- **UI stays on "Waiting for an agent call…"** — the page is passive; it only fills once `demo:run` emits events. Confirm the runner printed `Demo complete`.
 
 ## Contract
 

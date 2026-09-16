@@ -223,7 +223,12 @@ async function callAnalyse(body) {
     await emitDemoEvent('call_failed', { status: paid.status });
     throw new Error(parsed?.message ?? `Request failed with status ${paid.status}.`);
   }
-  await emitDemoEvent('payment_settled', { priceUsd: Number.isFinite(atomic) ? atomic / 1_000_000 : null });
+  let settleTx = null;
+  try {
+    const raw = paid.headers.get('PAYMENT-RESPONSE');
+    if (raw) settleTx = JSON.parse(Buffer.from(raw, 'base64').toString('utf8'))?.transaction ?? null;
+  } catch (_) { /* header shape is the facilitator's, not ours */ }
+  await emitDemoEvent('payment_settled', { priceUsd: Number.isFinite(atomic) ? atomic / 1_000_000 : null, tx: settleTx });
   await emitDemoEvent('analysis_completed', {
     verdict: parsed.verdict,
     score: parsed.tokenRisk?.score ?? null,
