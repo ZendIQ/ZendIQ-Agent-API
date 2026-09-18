@@ -13,7 +13,7 @@ This repository contains the complete agent-facing integration surface:
 - Public request and response contract
 - Devnet-first configuration
 
-The scoring model is intentionally not included. Signal weights and the logic that combines them run behind the hosted `/analyse` endpoint. The contract is open so integrators can inspect exactly what is sent, returned, paid for, and acted on; the model remains ZendIQ's proprietary engine.
+The scoring model is intentionally not included. Each response surfaces the individual signals, their observed values, their status, and each factor's point contribution to the score — so an agent can act on any single signal (for example, refuse on a serial-deployer flag) rather than only the headline verdict. But **how** those signals are derived and combined — the data sources, thresholds, and weighting model — runs behind the hosted `/analyse` endpoint and remains ZendIQ's proprietary engine. The contract is open so integrators can inspect exactly what is sent, returned, paid for, and acted on.
 
 This repository contains no extension analytics, user telemetry, production deployment configuration, database schema, facilitator wallet, or production credentials. It has fresh history independent of ZendIQ's private backend.
 

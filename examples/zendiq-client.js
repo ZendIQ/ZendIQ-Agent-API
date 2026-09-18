@@ -166,8 +166,16 @@ class ZendIQClient {
       await this.onEvent('payment_settled', { priceUsd: replayed ? 0 : priceUsd, replayed, tx: settlement?.transaction || null });
       await this.onEvent('analysis_completed', {
         verdict: body.verdict,
-        score: body.tokenRisk?.score ?? null,
-        level: body.tokenRisk?.level ?? null,
+        score: body.overallRisk?.score ?? body.tokenRisk?.score ?? null,
+        level: body.overallRisk?.level ?? body.tokenRisk?.level ?? null,
+        overall: body.overallRisk ? { score: body.overallRisk.score ?? null, level: body.overallRisk.level ?? null, floored: !!body.overallRisk.floored } : null,
+        execution: body.executionRisk ? { score: body.executionRisk.score ?? null, level: body.executionRisk.level ?? null, factors: (body.executionRisk.factors ?? []).map((f) => ({ name: f.name, sev: f.severity, points: f.points })) } : null,
+        tokenRisk: (body.tokenRisk && body.tokenRisk.available !== false)
+          ? { score: body.tokenRisk.score ?? null, level: body.tokenRisk.level ?? null, factors: (body.tokenRisk.factors ?? []).map((f) => ({ name: f.name, sev: f.severity, points: f.points, detail: f.detail })) }
+          : null,
+        sandwich: (body.sandwichExposure && body.sandwichExposure.available !== false)
+          ? { score: body.sandwichExposure.score ?? null, level: body.sandwichExposure.level ?? null, factors: (body.sandwichExposure.factors ?? []).map((f) => ({ name: f.factor, points: f.score, detail: f.impact })) }
+          : null,
         evidenceFingerprint: body.evidence_fingerprint ?? null,
         signalsResolved: body.signals_resolved ?? null,
         snapshot: body.snapshot ?? null,

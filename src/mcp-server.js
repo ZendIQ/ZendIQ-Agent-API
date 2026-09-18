@@ -231,8 +231,16 @@ async function callAnalyse(body) {
   await emitDemoEvent('payment_settled', { priceUsd: Number.isFinite(atomic) ? atomic / 1_000_000 : null, tx: settleTx });
   await emitDemoEvent('analysis_completed', {
     verdict: parsed.verdict,
-    score: parsed.tokenRisk?.score ?? null,
-    level: parsed.tokenRisk?.level ?? null,
+    score: parsed.overallRisk?.score ?? parsed.tokenRisk?.score ?? null,
+    level: parsed.overallRisk?.level ?? parsed.tokenRisk?.level ?? null,
+    overall: parsed.overallRisk ? { score: parsed.overallRisk.score ?? null, level: parsed.overallRisk.level ?? null, floored: !!parsed.overallRisk.floored } : null,
+    execution: parsed.executionRisk ? { score: parsed.executionRisk.score ?? null, level: parsed.executionRisk.level ?? null, factors: (parsed.executionRisk.factors ?? []).map((f) => ({ name: f.name, sev: f.severity, points: f.points })) } : null,
+    tokenRisk: (parsed.tokenRisk && parsed.tokenRisk.available !== false)
+      ? { score: parsed.tokenRisk.score ?? null, level: parsed.tokenRisk.level ?? null, factors: (parsed.tokenRisk.factors ?? []).map((f) => ({ name: f.name, sev: f.severity, points: f.points, detail: f.detail })) }
+      : null,
+    sandwich: (parsed.sandwichExposure && parsed.sandwichExposure.available !== false)
+      ? { score: parsed.sandwichExposure.score ?? null, level: parsed.sandwichExposure.level ?? null, factors: (parsed.sandwichExposure.factors ?? []).map((f) => ({ name: f.factor, points: f.score, detail: f.impact })) }
+      : null,
     evidenceFingerprint: parsed.evidence_fingerprint ?? null,
     signalsResolved: parsed.signals_resolved ?? null,
     snapshot: parsed.snapshot ?? null,
