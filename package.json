@@ -11,6 +11,7 @@
     "demo:run": "node demo/runner.js",
     "feed": "node examples/feed.js",
     "mcp": "node src/mcp-server.js",
+    "optimize": "node examples/optimize.js",
     "test": "node --test examples/*.test.js",
     "watch": "node examples/watch.js"
   },

@@ -4,7 +4,7 @@
  * Probe: does the ceiling hold across a crash, and does it fail in the safe
  * direction when we cannot know whether a payment settled?
  *
- * Run: npm --prefix agent test
+ * Run: npm test
  */
 
 const fs = require('node:fs');

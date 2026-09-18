@@ -23,6 +23,7 @@
 const { x402Client, x402HTTPClient } = require('@x402/core/client');
 const { ExactSvmScheme: ExactSvmClientScheme } = require('@x402/svm/exact/client');
 const { SOLANA_DEVNET_CAIP2, SOLANA_MAINNET_CAIP2 } = require('@x402/svm');
+const { getTransactionDecoder, getBase64EncodedWireTransaction, partiallySignTransaction } = require('@solana/kit');
 
 const USDC_DECIMALS = 6;
 
@@ -69,7 +70,7 @@ class ZendIQClient {
    * @param {object} opts - `signer`, `budget`, `baseUrl`, `network`, `rpcUrl`.
    */
   constructor(opts) {
-    this.baseUrl = (opts.baseUrl ?? 'http://127.0.0.1:3000').replace(/\/$/, '');
+    this.baseUrl = (opts.baseUrl ?? 'https://zendiq-backend.onrender.com').replace(/\/$/, '');
     this.budget = opts.budget;
     this.network = opts.network ?? 'devnet';
     this.onEvent = typeof opts.onEvent === 'function' ? opts.onEvent : () => {};
@@ -223,6 +224,130 @@ class ZendIQClient {
       settlementTx: settlement?.transaction || null,
     };
   }
+
+  /**
+   * Pay for and fetch an optimized UNSIGNED swap transaction plus its plan.
+   *
+   * Response-consuming only: the server does the risk-driven venue/fee decision and
+   * returns the transaction, plan, simulation, and net-benefit. This client never
+   * sees the scoring logic — it verifies and (optionally) signs the bytes.
+   *
+   * @param {object} swap - inputMint, outputMint, amount, slippageBps, taker.
+   * @param {object} [opts] - { onEvent } per-call event sink (execution lane).
+   * @returns {Promise<{ok: boolean, status: number, order?: object, error?: string, paidUsd: number, replayed: boolean}>} Result.
+   */
+  async optimise(swap, { onEvent = () => {} } = {}) {
+    await onEvent('optimize_started', { inputMint: swap.inputMint, outputMint: swap.outputMint });
+    const url = `${this.baseUrl}/v1/agent/optimize`;
+    const send = (headers = {}) => fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(swap),
+    });
+
+    const challenge = await send();
+    if (challenge.status !== 402) {
+      const body = await challenge.json().catch(() => ({}));
+      return {
+        ok: challenge.ok,
+        status: challenge.status,
+        order: challenge.ok ? body : undefined,
+        error: challenge.ok ? undefined : (body.error ?? `unexpected ${challenge.status}`),
+        paidUsd: 0,
+        replayed: false,
+      };
+    }
+
+    const required = this.http.getPaymentRequiredResponse((n) => challenge.headers.get(n));
+    const accepts = required?.accepts?.[0];
+    if (!accepts) throw new Error('402 carried no accepts entry');
+    const atomic = Number(accepts.amount ?? accepts.maxAmountRequired);
+    if (!Number.isFinite(atomic) || atomic <= 0) throw new Error('402 carried no usable price');
+    const priceUsd = atomic / 10 ** USDC_DECIMALS;
+    await onEvent('payment_required', { priceUsd, network: this.network });
+
+    const reservation = this.budget.reserve(priceUsd, { route: 'POST /v1/agent/optimize' });
+
+    let payload;
+    try {
+      payload = await retryTransient(() => this.http.createPaymentPayload(required));
+      await onEvent('payment_signed', { network: this.network });
+    } catch (err) {
+      this.budget.release(reservation, `sign_failed: ${err.message.slice(0, 80)}`);
+      throw err;
+    }
+
+    let response;
+    try {
+      response = await send(this.http.encodePaymentSignatureHeader(payload));
+    } catch (err) {
+      this.budget.settle(reservation, { note: `network_error: ${err.message.slice(0, 80)}` });
+      throw err;
+    }
+
+    const body = await response.json().catch(() => ({}));
+    const settlement = decodeHeader(response.headers.get('PAYMENT-RESPONSE'));
+    const replayed = body?.replayed === true;
+
+    if (response.ok && replayed) this.budget.release(reservation, 'served_from_cache_no_second_payment');
+    else if (response.ok) this.budget.settle(reservation, { note: settlement?.transaction || 'settled' });
+    else if (response.status === 402 || response.status === 429 || response.status === 409) this.budget.release(reservation, `not_settled_${response.status}`);
+    else this.budget.settle(reservation, { note: `unresolved_${response.status}` });
+
+    if (response.ok) {
+      await onEvent('payment_settled', { priceUsd: replayed ? 0 : priceUsd, replayed, tx: settlement?.transaction || null });
+      await onEvent('order_ready', {
+        venue: body.plan?.venueLabel ?? body.plan?.venue ?? null,
+        slippageBps: body.plan?.slippageBps ?? null,
+        simulation: body.simulation?.status ?? null,
+        outAmount: body.plan?.route?.outAmount ?? null,
+        priorityFee: body.plan?.priorityFee ?? null,
+        hasTransaction: typeof body.transaction === 'string' && body.transaction.length > 100,
+        requestId: body.requestId ?? null,
+      });
+    } else {
+      await onEvent('call_failed', { status: response.status });
+    }
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      order: response.ok ? body : undefined,
+      error: response.ok ? undefined : (body.error ?? body.message ?? `http ${response.status}`),
+      paidUsd: response.ok && !replayed ? priceUsd : 0,
+      replayed,
+    };
+  }
 }
 
-module.exports = { ZendIQClient, decodeHeader };
+/**
+ * Sign an unsigned Jupiter order and submit it via Jupiter's /execute.
+ *
+ * Uses partiallySignTransaction because JupiterZ (RFQ) routes require a market-maker
+ * co-signature that /execute adds — a fully-signed tx would be rejected on those routes.
+ *
+ * @param {object} params - { order, signer, executeUrl }.
+ * @returns {Promise<{ok: boolean, status: string, code?: number, signature: string|null, error: string|null}>} Result.
+ */
+async function signAndExecute({ order, signer, executeUrl = 'https://lite-api.jup.ag/ultra/v1/execute' }) {
+  const txBytes = Uint8Array.from(Buffer.from(order.transaction, 'base64'));
+  const decoded = getTransactionDecoder().decode(txBytes);
+  const signed = await partiallySignTransaction([signer.keyPair], decoded);
+  const signedTransaction = getBase64EncodedWireTransaction(signed);
+
+  const res = await fetch(executeUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ signedTransaction, requestId: order.requestId }),
+  });
+  const body = await res.json().catch(() => ({}));
+  return {
+    ok: res.ok && body.status === 'Success',
+    status: body.status ?? `http_${res.status}`,
+    code: body.code,
+    signature: body.signature ?? null,
+    error: body.error ?? null,
+  };
+}
+
+module.exports = { ZendIQClient, decodeHeader, signAndExecute };

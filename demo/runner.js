@@ -4,10 +4,10 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { BudgetLedger } = require('../examples/budget');
 const { loadAgentSigner } = require('../examples/keys');
-const { ZendIQClient } = require('../examples/zendiq-client');
+const { ZendIQClient, signAndExecute } = require('../examples/zendiq-client');
 
 const NETWORK = process.env.AGENT_NETWORK ?? 'devnet';
-const BASE_URL = process.env.ZENDIQ_API_URL ?? 'http://127.0.0.1:3000';
+const BASE_URL = process.env.ZENDIQ_API_URL ?? 'https://zendiq-backend.onrender.com';
 const RPC_URL = process.env.AGENT_RPC_URL
   ?? (NETWORK === 'mainnet' ? 'https://api.mainnet-beta.solana.com' : 'https://api.devnet.solana.com');
 const EVENT_URL = process.env.ZENDIQ_DEMO_EVENTS_URL ?? 'http://127.0.0.1:4173/api/events';
@@ -111,7 +111,42 @@ async function main() {
     httpVerdict: httpResult.verdict.verdict,
   });
   if (!sameEvidence) throw new Error('MCP and HTTP evidence fingerprints differ');
-  console.log(`Demo complete: ${mcpResult.verdict} · evidence ${mcpResult.evidence_fingerprint}`);
+  console.log(`Analyse complete: ${mcpResult.verdict} · evidence ${mcpResult.evidence_fingerprint}`);
+
+  // ---- Execution phase: optimize -> (sign -> execute) | stop at simulation ----
+  // The swap is a mainnet Jupiter route, so the taker must hold the input token.
+  // Default: stop at simulation (spends nothing). --execute signs + lands a real swap.
+  const TAKER = process.env.ZENDIQ_TAKER ?? valueFor('--taker', signer.address);
+  const doExecute = args.includes('--execute');
+  const emitExec = (type, data) => { eventQueue = eventQueue.then(() => emit(type, 'exec', data)); return eventQueue; };
+
+  const optimizeResult = await client.optimise(
+    { ...SWAP, taker: TAKER },
+    { onEvent: (type, data) => { emitExec(type, data); } },
+  );
+  await eventQueue;
+
+  if (!optimizeResult.ok) {
+    await emitExec('call_failed', { status: optimizeResult.status, message: optimizeResult.error });
+    console.log(`Optimize failed: ${optimizeResult.error ?? optimizeResult.status}`);
+  } else if (!doExecute) {
+    await emitExec('execution_skipped', {
+      reason: 'simulation_only',
+      simulation: optimizeResult.order.simulation?.status ?? null,
+    });
+    console.log(`Optimize complete (stopped at simulation): ${optimizeResult.order.plan?.venueLabel ?? optimizeResult.order.plan?.venue}`);
+  } else {
+    const takerKeyFile = process.env.ZENDIQ_TAKER_KEYPAIR;
+    if (!takerKeyFile) throw new Error('--execute requires ZENDIQ_TAKER_KEYPAIR (mainnet keypair for the taker wallet)');
+    const taker = await loadAgentSigner({ network: 'mainnet', file: takerKeyFile });
+    await emitExec('signing', { wallet: taker.address });
+    await emitExec('executing', {});
+    const exec = await signAndExecute({ order: optimizeResult.order, signer: taker.signer });
+    if (exec.ok) await emitExec('executed', { signature: exec.signature });
+    else await emitExec('call_failed', { status: exec.status, message: exec.error ?? exec.status });
+    await eventQueue;
+    console.log(`Execution ${exec.ok ? 'landed' : 'failed'}: ${exec.signature ?? exec.status}`);
+  }
 }
 
 main().catch(async (err) => {

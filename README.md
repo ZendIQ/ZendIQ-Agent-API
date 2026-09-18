@@ -8,6 +8,7 @@ This repository contains the complete agent-facing integration surface:
 
 - MCP server for `zendiq_triage_swap`
 - x402 payment client
+- Execution client — build, verify, and submit an optimized unsigned swap (`/optimize`)
 - Autonomous candidate feed and triage loop
 - Decision ledger with a hard local spend ceiling
 - Public request and response contract
@@ -21,7 +22,7 @@ This repository contains no extension analytics, user telemetry, production depl
 
 - Node.js 22.5 or newer
 - A Solana keypair holding devnet USDC for paid calls
-- A running ZendIQ Agent API endpoint
+- A running ZendIQ Agent API endpoint — set `ZENDIQ_AGENT_URL` to the hosted URL (`https://zendiq-backend.onrender.com`) or your own instance
 
 ## Quickstart
 
@@ -29,7 +30,7 @@ This repository contains no extension analytics, user telemetry, production depl
 npm ci
 Copy-Item .env.example .env
 $env:ZENDIQ_AGENT_KEYPAIR = 'C:\path\to\devnet-keypair.json'
-$env:ZENDIQ_AGENT_URL = 'http://127.0.0.1:3000'
+$env:ZENDIQ_AGENT_URL = 'https://zendiq-backend.onrender.com'
 npm run mcp
 ```
 
@@ -57,11 +58,27 @@ npm run watch
 
 `watch` begins with USDC as a control, so a run proves that the agent discriminates rather than refusing everything. It then prints a run ledger containing triage spend, refused candidates, protected candidates, and candidates cleared for direct routing.
 
-Trade execution is intentionally not wired in this version. The agent reports the recommended path and fees it would use without claiming that money moved. Keys and budget ledgers live under the gitignored `runtime/` directory.
+The autonomous agent is advisory — it reports the recommended path and fees without claiming that money moved. To build and submit a real optimized swap, see **Execution** below. Keys and budget ledgers live under the gitignored `runtime/` directory.
+
+## Execution — build a signable swap (`/optimize`)
+
+`/analyse` is advisory. `/optimize` goes one step further: it returns an **unsigned** swap transaction built through Jupiter Ultra, with the priority-fee and MEV posture chosen from the same risk model — plus the plan, an on-chain simulation, and the net-benefit arithmetic. You verify the bytes against the stated plan, then sign and submit with your own wallet. ZendIQ never holds a key.
+
+```powershell
+npm run budget:init
+# Stop at simulation — pays $0.02 USDC, prints the plan + simulation, signs nothing:
+npm run optimize -- --taker <YOUR_MAINNET_PUBKEY>
+
+# Real landing — signs the returned tx and submits via Jupiter:
+$env:ZENDIQ_TAKER_KEYPAIR = 'C:\path\to\mainnet-keypair.json'
+npm run optimize -- --taker <YOUR_MAINNET_PUBKEY> --execute
+```
+
+The swap routes on **mainnet** (Jupiter Ultra has no devnet), so `--taker` must be a wallet that holds the input token; the x402 payment stays on devnet USDC. By default the example **stops at simulation and spends nothing on-chain** — pass `--execute` (with `ZENDIQ_TAKER_KEYPAIR`) to sign and land a real swap. The response carries the unsigned `transaction`, `requestId`, the `plan`, the `simulation` result, and the `netBenefit` breakdown — everything needed to confirm the transaction matches the stated intent before signing.
 
 ## Demo visualizer
 
-A local spectator view that renders one real swap-triage call as a live, animated sequence across two transports side by side — the MCP agent tool and the direct x402 HTTP rail — then verifies that both returned the same evidence fingerprint. Every value on screen is real: live risk score, real `$0.01` USDC settlement, real response. Nothing is staged.
+A local spectator view that renders one real swap-triage call as a live, animated sequence across two transports side by side — the MCP agent tool and the direct x402 HTTP rail — then verifies that both returned the same evidence fingerprint. It then runs `/optimize` for the same swap and shows the execution sequence — **Optimize → Sign → Land** — ending at an on-chain simulation (or a real mainnet landing with `--execute`). Every value on screen is real: live risk score, real USDC settlement, real transaction. Nothing is staged.
 
 ### Prerequisites
 
@@ -98,8 +115,10 @@ npm run demo
 Open `http://127.0.0.1:4173`, then in a second terminal:
 
 ```powershell
-npm run demo:run -- --mint DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
+npm run demo:run -- --mint DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 --taker <YOUR_MAINNET_PUBKEY>
 ```
+
+To finish with a real on-chain landing, add `--execute` and set `ZENDIQ_TAKER_KEYPAIR` to the mainnet keypair for `--taker`. Without `--execute`, the execution lane stops at simulation and spends nothing on-chain.
 
 Both lanes fill in — request → `402` → USDC authorization signed → payment settled → analysis returned — and the footer shows **Verified · identical evidence** with the shared fingerprint. The runner exits `0` on a fingerprint match, non-zero on mismatch. The event stream deliberately excludes payment authorizations, secrets, RPC URLs, and complete wallet addresses.
 
@@ -132,6 +151,10 @@ Stable response fields:
 - `disclaimer`
 
 Additional fields are experimental and may change within `v1`. Stable fields are additive-only within `v1`; breaking changes ship under a new API version.
+
+`POST /v1/agent/optimize`
+
+Same request body as `/analyse` plus a `taker` public key. Returns an **unsigned** Jupiter Ultra swap `transaction` and `requestId`, the `plan` (venue, slippage, priority-fee posture), a `simulation` result, and the `netBenefit` breakdown. Zero custody — you verify, sign, and submit. Priced per call in USDC.
 
 ## Security
 

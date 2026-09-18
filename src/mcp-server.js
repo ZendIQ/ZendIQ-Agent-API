@@ -14,7 +14,7 @@
  * client-side parse error. All diagnostics go to stderr. Never console.log in here.
  *
  * Configuration:
- *   ZENDIQ_AGENT_URL       Base URL of the API. Default http://localhost:3000
+ *   ZENDIQ_AGENT_URL       Base URL of the API. Default https://zendiq-backend.onrender.com
  *   ZENDIQ_AGENT_KEYPAIR   Path to a Solana CLI keypair JSON file used to pay.
  *   ZENDIQ_AGENT_NETWORK   'devnet' (default) or 'mainnet'.
  *
@@ -40,7 +40,7 @@ const {
 const PROTOCOL_FALLBACK = '2025-06-18';
 const SERVER_INFO = { name: 'zendiq-agent', version: '1.0.0' };
 
-const BASE_URL = (process.env.ZENDIQ_AGENT_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
+const BASE_URL = (process.env.ZENDIQ_AGENT_URL ?? 'https://zendiq-backend.onrender.com').replace(/\/+$/, '');
 const ANALYSE_URL = `${BASE_URL}/v1/agent/analyse`;
 const KEYPAIR_PATH = process.env.ZENDIQ_AGENT_KEYPAIR ?? null;
 const NETWORK = process.env.ZENDIQ_AGENT_NETWORK === 'mainnet' ? 'mainnet' : 'devnet';

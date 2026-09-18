@@ -25,7 +25,7 @@ const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 const NETWORK = process.env.AGENT_NETWORK ?? 'devnet';
-const API = process.env.ZENDIQ_API_URL ?? 'http://127.0.0.1:3000';
+const API = process.env.ZENDIQ_API_URL ?? 'https://zendiq-backend.onrender.com';
 const STATE_DIR = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
 const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(STATE_DIR, `budget-${NETWORK}.json`);
 const TRADE_LAMPORTS = process.env.AGENT_TRADE_LAMPORTS ?? '20000000'; // 0.02 SOL
@@ -148,7 +148,7 @@ async function handle(candidate, client, run, budget) {
     // It still has to be stated: an unexplained short ledger reads as a crash.
     if (err instanceof BudgetExceededError) {
       console.log(`  ${err.message}`);
-      console.log('  stopping here — raise the ceiling with: npm --prefix agent run budget:init -- <usd>');
+      console.log('  stopping here — raise the ceiling with: npm run budget:init');
       run.stop(err.message);
       return false;
     }
@@ -193,7 +193,7 @@ async function main() {
     budget = BudgetLedger.load(BUDGET_FILE, NETWORK);
   } catch (err) {
     console.error(`\n${err.message}`);
-    console.error(`hint: npm --prefix agent run budget:init -- 1.00\n`);
+    console.error(`hint: npm run budget:init\n`);
     process.exit(1);
   }
 
@@ -218,7 +218,7 @@ async function main() {
 
   if (budget.remainingUsd <= 0) {
     console.error(`  no budget left — ${planned} planned calls, $0.0000 available`);
-    console.error('  raise the ceiling with: npm --prefix agent run budget:init -- <usd>\n');
+    console.error('  raise the ceiling with: npm run budget:init\n');
     process.exit(1);
   }
 

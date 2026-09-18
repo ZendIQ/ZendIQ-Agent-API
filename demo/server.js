@@ -8,6 +8,7 @@ const PORT = Number(process.env.ZENDIQ_DEMO_PORT ?? 4173);
 const EVENT_TYPES = new Set([
   'call_started', 'payment_required', 'payment_signed', 'payment_settled',
   'analysis_completed', 'call_failed', 'comparison_completed', 'reset',
+  'optimize_started', 'order_ready', 'signing', 'executing', 'executed', 'execution_skipped',
 ]);
 const clients = new Set();
 let events = [];

@@ -15,5 +15,6 @@ examples\budget.js
 examples\budget.test.js
 examples\feed.js
 examples\keys.js
+examples\optimize.js
 examples\watch.js
 examples\zendiq-client.js
