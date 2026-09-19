@@ -46,6 +46,60 @@ npm run analyse
 
 The example defaults to devnet, generates its own throwaway key on first run, and uses a `$1.00` local budget. Fund the printed address with devnet USDC before making the paid call. Nothing defaults to ZendIQ production infrastructure.
 
+## Connect it to an agent (MCP)
+
+The server speaks the Model Context Protocol over stdio (newline-delimited JSON-RPC), so any MCP-capable client — Claude Desktop, Cursor, Cline, or your own harness — can call it directly. It exposes one tool:
+
+**`zendiq_triage_swap`** — decide how to execute a proposed swap before signing.
+
+| Input | Type | Required | Description |
+|---|---|---|---|
+| `inputMint` | string | yes | Base58 mint being sold |
+| `outputMint` | string | yes | Base58 mint being bought |
+| `amount` | string | yes | Amount to sell, in the input mint's atomic units (e.g. `"1000000000"` for 1 SOL) |
+| `slippageBps` | integer | no | Slippage tolerance in basis points; omit for the route default |
+
+Output (`structuredContent`):
+
+- `verdict` — `Safe` (route normally), `Protect` (route through a Jito bundle), or `Refuse` (do not execute)
+- `recommendedExecution` — `{ path, priorityFeeLamports, jitoTipLamports }`
+- `reasons` — plain-language justification
+
+The full risk breakdown (token-risk factors, sandwich exposure, provenance fingerprint) is returned unchanged alongside these committed fields, so the MCP result is byte-identical to the HTTP `/analyse` response. Each call costs `$0.01` in USDC, paid automatically via x402 using the configured keypair.
+
+Register it in your MCP client's config (paths must be absolute):
+
+```json
+{
+  "mcpServers": {
+    "zendiq": {
+      "command": "node",
+      "args": ["/absolute/path/to/ZendIQ-Agent-API/src/mcp-server.js"],
+      "env": {
+        "ZENDIQ_AGENT_URL": "https://zendiq-backend.onrender.com",
+        "ZENDIQ_AGENT_KEYPAIR": "/absolute/path/to/devnet-keypair.json",
+        "ZENDIQ_AGENT_NETWORK": "devnet"
+      }
+    }
+  }
+}
+```
+
+| Env | Default | Purpose |
+|---|---|---|
+| `ZENDIQ_AGENT_URL` | `https://zendiq-backend.onrender.com` | API base URL |
+| `ZENDIQ_AGENT_KEYPAIR` | — | Solana keypair JSON that holds USDC; signs x402 payments only |
+| `ZENDIQ_AGENT_NETWORK` | `devnet` | Payment rail: `devnet` or `mainnet` |
+
+Diagnostics go to stderr so stdout stays a clean JSON-RPC transport. Transport is stdio only — the standard local MCP transport every client supports; a remote/HTTP transport is not currently provided.
+
+To sanity-check the wiring without a client, drive it by hand — `initialize` then `tools/list` need no keypair or payment:
+
+```powershell
+'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}',
+'{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | npm run --silent mcp
+```
+
 ## Autonomous agent
 
 The complete test agent is public under `examples/`. It watches DexScreener's live Solana boost feed, enriches each candidate, pays ZendIQ for a verdict, and records whether it would refuse, protect, or route the trade normally.
