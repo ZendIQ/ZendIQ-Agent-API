@@ -42,6 +42,7 @@ const SERVER_INFO = { name: 'zendiq-agent', version: '1.0.0' };
 
 const BASE_URL = (process.env.ZENDIQ_AGENT_URL ?? 'https://zendiq-backend.onrender.com').replace(/\/+$/, '');
 const ANALYSE_URL = `${BASE_URL}/v1/agent/analyse`;
+const SCREEN_URL = `${BASE_URL}/v1/agent/analyse-token`;
 const KEYPAIR_PATH = process.env.ZENDIQ_AGENT_KEYPAIR ?? null;
 const NETWORK = process.env.ZENDIQ_AGENT_NETWORK === 'mainnet' ? 'mainnet' : 'devnet';
 const DEMO_EVENTS_URL = process.env.ZENDIQ_DEMO_EVENTS_URL ?? null;
@@ -110,6 +111,47 @@ const TOOL = {
       },
     },
     required: ['verdict', 'recommendedExecution', 'reasons'],
+  },
+};
+
+const TOOL_SCREEN = {
+  name: 'zendiq_screen_token',
+  title: 'Screen a Solana token',
+  description:
+    'Screen a single Solana token by mint address, before you have a trade size. Returns '
+    + 'the token risk score (rug / honeypot / mint & freeze authority / holder concentration '
+    + 'signals) with a signals-resolved coverage figure and cache age. Free and rate-limited '
+    + '— the cheap "should I even look at this?" call for scanning many mints. To score a '
+    + 'specific trade (sandwich exposure, route, fees) use zendiq_triage_swap, which returns '
+    + 'this same token score inline, so screening first is optional, never required.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      mint: { type: 'string', description: 'Base58 mint address of the token to screen.' },
+    },
+    required: ['mint'],
+    additionalProperties: false,
+  },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      tokenRisk: {
+        type: 'object',
+        properties: {
+          score: { type: ['integer', 'null'] },
+          level: { type: ['string', 'null'] },
+        },
+      },
+      signals_resolved: { type: 'string', description: 'Signal coverage, e.g. "12/16".' },
+      cache: {
+        type: 'object',
+        properties: {
+          hit: { type: 'boolean' },
+          ageSeconds: { type: 'integer', description: 'Age of the served score in seconds; 0 when freshly computed.' },
+        },
+      },
+    },
+    required: ['tokenRisk'],
   },
 };
 
@@ -288,6 +330,40 @@ function buildRequest(args) {
 }
 
 /**
+ * Validate the single mint argument for the free screen tool.
+ *
+ * @param {object} args - Raw tool arguments.
+ * @returns {string} Base58 mint.
+ */
+function buildScreenRequest(args) {
+  const mint = String(args?.mint ?? '');
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) {
+    throw new Error('mint must be a base58 Solana mint address.');
+  }
+  return mint;
+}
+
+/**
+ * Call the free screen endpoint. No payment: the route is not behind the x402 gate,
+ * so this is a plain POST with no 402 handling.
+ *
+ * @param {string} mint - Base58 mint.
+ * @returns {Promise<object>} Parsed response body.
+ */
+async function callScreen(mint) {
+  const res = await fetch(SCREEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'X-ZendIQ-Surface': 'mcp' },
+    body: JSON.stringify({ mint }),
+  });
+  const parsed = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(parsed?.message ?? `Screen failed with status ${res.status}.`);
+  }
+  return parsed;
+}
+
+/**
  * Handle one JSON-RPC request.
  *
  * @param {object} msg - Decoded request.
@@ -308,14 +384,17 @@ async function handle(msg) {
       return {};
 
     case 'tools/list':
-      return { tools: [TOOL] };
+      return { tools: [TOOL, TOOL_SCREEN] };
 
     case 'tools/call': {
-      if (msg.params?.name !== TOOL.name) {
-        throw Object.assign(new Error(`Unknown tool: ${msg.params?.name}`), { code: -32602 });
+      const name = msg.params?.name;
+      if (name !== TOOL.name && name !== TOOL_SCREEN.name) {
+        throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32602 });
       }
       try {
-        const result = project(await callAnalyse(buildRequest(msg.params?.arguments)));
+        const result = name === TOOL_SCREEN.name
+          ? await callScreen(buildScreenRequest(msg.params?.arguments))
+          : project(await callAnalyse(buildRequest(msg.params?.arguments)));
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
           structuredContent: result,

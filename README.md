@@ -48,9 +48,15 @@ The example defaults to devnet, generates its own throwaway key on first run, an
 
 ## Connect it to an agent (MCP)
 
-The server speaks the Model Context Protocol over stdio (newline-delimited JSON-RPC), so any MCP-capable client — Claude Desktop, Cursor, Cline, or your own harness — can call it directly. It exposes one tool:
+The server speaks the Model Context Protocol over stdio (newline-delimited JSON-RPC), so any MCP-capable client — Claude Desktop, Cursor, Cline, or your own harness — can call it directly. It exposes two tools, split by workflow stage:
 
-**`zendiq_triage_swap`** — decide how to execute a proposed swap before signing.
+**`zendiq_screen_token`** — **screen** stage. Screen a token by mint alone, *before* you have a trade size (an agent scanning many fresh mints has none). **Free and rate-limited**, cacheable across callers. Returns the token risk score, its signal breakdown, `signals_resolved` coverage, and a `cache` block (`hit`, `ageSeconds`, `observedAt`) so you can decide whether to force fresh.
+
+| Input | Type | Required | Description |
+|---|---|---|---|
+| `mint` | string | yes | Base58 mint of the token to screen |
+
+**`zendiq_triage_swap`** — **decide** stage. Decide how to execute a specific swap before signing. Paid. Returns the **full token score inline** (so screening first is optional, never required), plus sandwich exposure and the recommended execution.
 
 | Input | Type | Required | Description |
 |---|---|---|---|
@@ -184,7 +190,15 @@ Both lanes fill in — request → `402` → USDC authorization signed → payme
 
 ## Contract
 
-`POST /v1/agent/analyse`
+`POST /v1/agent/analyse-token` — **free**, rate-limited (screen stage)
+
+```json
+{ "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263" }
+```
+
+Screen a token by mint, with no trade size. Returns the token risk score, its signal breakdown, `signals_resolved` coverage, and a `cache` block (`hit`, `ageSeconds`, `observedAt`) — a cached score reports the slot and time it was computed at, never the current one. No payment; rate-limited per IP.
+
+`POST /v1/agent/analyse` — paid (decide stage)
 
 ```json
 {
