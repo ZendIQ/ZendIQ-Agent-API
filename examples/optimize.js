@@ -18,6 +18,7 @@
  * input token, and --execute needs its keypair in ZENDIQ_TAKER_KEYPAIR.
  */
 
+const fs = require('node:fs');
 const path = require('node:path');
 const { BudgetLedger } = require('./budget');
 const { loadAgentSigner } = require('./keys');
@@ -29,6 +30,28 @@ const RPC_URL = process.env.AGENT_RPC_URL
   ?? (NETWORK === 'mainnet' ? 'https://api.mainnet-beta.solana.com' : 'https://api.devnet.solana.com');
 const STATE_DIR = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
 const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(STATE_DIR, `budget-${NETWORK}.json`);
+// Sits beside the keypairs in runtime/, which is gitignored as a directory and excluded
+// from the public sync; the *.key suffix matches the root ignore rule as well.
+const DEBUG_KEY_FILE = process.env.AGENT_DEBUG_KEY_FILE ?? path.join(STATE_DIR, 'debug.key');
+
+/**
+ * The override key, from the environment or the local key file.
+ *
+ * Trimmed because the server compares it byte-for-byte after a length check, so a
+ * trailing newline from an editor fails as "invalid header" rather than as whitespace.
+ *
+ * @returns {string|null} Key, or null when neither source has one.
+ */
+function readDebugKey() {
+  const fromEnv = (process.env.ZENDIQ_DEBUG_KEY ?? '').trim();
+  if (fromEnv) return fromEnv;
+  try {
+    return fs.readFileSync(DEBUG_KEY_FILE, 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+}
+const DEBUG_KEY = readDebugKey();
 
 const args = process.argv.slice(2);
 const valueFor = (flag, fallback) => {
@@ -66,11 +89,13 @@ const SWAP = {
   const debugVenue = valueFor('--venue', null);
   const client = new ZendIQClient({
     signer, budget, baseUrl: BASE_URL, network: NETWORK, rpcUrl: RPC_URL,
-    debugKey: process.env.ZENDIQ_DEBUG_KEY ?? null,
+    debugKey: DEBUG_KEY,
   });
 
-  if (debugVenue && !process.env.ZENDIQ_DEBUG_KEY) {
-    console.error('\n  --venue requires ZENDIQ_DEBUG_KEY (must match AGENT_DEBUG_KEY on the server).\n');
+  if (debugVenue && !DEBUG_KEY) {
+    console.error('\n  --venue requires a debug key matching AGENT_DEBUG_KEY on the server.');
+    console.error('  Set ZENDIQ_DEBUG_KEY, or write it to:');
+    console.error(`    ${DEBUG_KEY_FILE}\n`);
     process.exit(1);
   }
   console.log(`optimize  ${SWAP.amount} ${SWAP.inputMint.slice(0, 4)}… -> ${SWAP.outputMint.slice(0, 4)}…${debugVenue ? `  [forced venue: ${debugVenue}]` : ''}`);
