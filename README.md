@@ -22,7 +22,7 @@ This repository contains no extension analytics, user telemetry, production depl
 
 - Node.js 22.5 or newer
 - A Solana keypair holding devnet USDC for paid calls
-- A running ZendIQ Agent API endpoint — set `ZENDIQ_AGENT_URL` to the hosted URL (`https://zendiq-backend.onrender.com`) or your own instance
+- A ZendIQ Agent API endpoint. Both the MCP server and the examples default to ZendIQ's hosted API at `https://zendiq-backend.onrender.com` — see [Where your calls go](#where-your-calls-go) before running anything. Point `ZENDIQ_AGENT_URL` (MCP) or `ZENDIQ_API_URL` (examples) at your own instance to avoid that.
 
 ## Quickstart
 
@@ -44,7 +44,28 @@ npm run budget:init
 npm run analyse
 ```
 
-The example defaults to devnet, generates its own throwaway key on first run, and uses a `$1.00` local budget. Fund the printed address with devnet USDC before making the paid call. Nothing defaults to ZendIQ production infrastructure.
+The example generates its own throwaway key on first run and uses a `$1.00` local budget. Fund the printed address with devnet USDC before making the paid call.
+
+## Where your calls go
+
+**Everything in this repository is a client.** The MCP server, despite the name, is a local stdio adapter that forwards to an HTTP API over the network — it does not analyse anything itself. The scoring engine runs server-side.
+
+**The default endpoint is ZendIQ's live hosted API.** If you clone this repo and run it without setting a URL, your calls hit our production service and are billed as real x402 payments:
+
+```js
+const BASE_URL = process.env.ZENDIQ_API_URL ?? 'https://zendiq-backend.onrender.com';
+```
+
+That default is deliberate — it makes the quickstart work without infrastructure. It is not a sandbox. Two consequences worth understanding before you run a loop:
+
+- **Payments are real settlements**, on whichever rail `ZENDIQ_AGENT_NETWORK` names. They are cheap and currently settle in devnet USDC, but they are on-chain transactions, not mocks.
+- **`npm run watch` is an autonomous loop.** It pays per candidate until the local budget ceiling stops it. Set `budget:init` deliberately; it is the only thing bounding spend.
+
+To keep test traffic off our service, set the URL to your own instance — `ZENDIQ_AGENT_URL` for the MCP server, `ZENDIQ_API_URL` for the examples. Note these are two separate variables reading two separate code paths; setting one does not affect the other.
+
+**Payment rail:** `ZENDIQ_AGENT_NETWORK` defaults to `devnet`, and the hosted API settles in **devnet USDC** today. A wallet funded only on mainnet cannot pay for a call, even though the market data being analysed is mainnet. Fund a devnet wallet first.
+
+No ZendIQ credentials ship in this repository. `ZENDIQ_AGENT_KEYPAIR` is your key, signs your payments, and never leaves your machine.
 
 ## Connect it to an agent (MCP)
 
@@ -93,9 +114,9 @@ Register it in your MCP client's config (paths must be absolute):
 
 | Env | Default | Purpose |
 |---|---|---|
-| `ZENDIQ_AGENT_URL` | `https://zendiq-backend.onrender.com` | API base URL |
+| `ZENDIQ_AGENT_URL` | `https://zendiq-backend.onrender.com` | API base URL. **The default is ZendIQ's live service** — see [Where your calls go](#where-your-calls-go) |
 | `ZENDIQ_AGENT_KEYPAIR` | — | Solana keypair JSON that holds USDC; signs x402 payments only |
-| `ZENDIQ_AGENT_NETWORK` | `devnet` | Payment rail: `devnet` or `mainnet` |
+| `ZENDIQ_AGENT_NETWORK` | `devnet` | Payment rail: `devnet` or `mainnet`. The hosted API settles in devnet USDC today |
 
 Diagnostics go to stderr so stdout stays a clean JSON-RPC transport. Transport is stdio only — the standard local MCP transport every client supports; a remote/HTTP transport is not currently provided.
 

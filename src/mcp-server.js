@@ -67,9 +67,16 @@ const TOOL = {
     + 'Refuse (do not execute). Screens the output token for rug and honeypot patterns and '
     + 'estimates sandwich-attack exposure. Advisory only: no transaction is built, no keys '
     + 'are handled, and nothing is executed on your behalf. Each call costs $0.01 in USDC, '
-    + 'paid automatically via x402. The full risk breakdown behind the verdict — token risk '
+    + 'paid automatically via x402. '
+    + 'NETWORK: payment settles in DEVNET USDC, so an agent funded only on mainnet cannot '
+    + 'pay for this call today — fund a devnet wallet first. The market data analysed is '
+    + 'mainnet, so the verdict itself is about real liquidity. '
+    + 'The full risk breakdown behind the verdict — token risk '
     + 'factors, sandwich exposure detail, and route economics — is available on the HTTP '
-    + 'endpoint POST /v1/agent/analyse.',
+    + 'endpoint POST /v1/agent/analyse. The HTTP endpoint POST /v1/agent/optimize ($0.02) '
+    + 'additionally returns an unsigned transaction; note it routes against mainnet '
+    + 'liquidity via Jupiter Ultra, so its taker must be a mainnet wallet holding the input '
+    + 'token even though that call is also paid for in devnet USDC.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -121,7 +128,9 @@ const TOOL_SCREEN = {
     'Screen a single Solana token by mint address, before you have a trade size. Returns '
     + 'the token risk score (rug / honeypot / mint & freeze authority / holder concentration '
     + 'signals) with a signals-resolved coverage figure and cache age. Free and rate-limited '
-    + '— the cheap "should I even look at this?" call for scanning many mints. To score a '
+    + '— the cheap "should I even look at this?" call for scanning many mints. Because it is '
+    + 'free, the devnet-USDC payment constraint that applies to zendiq_triage_swap does not '
+    + 'apply here; the token data itself is mainnet. To score a '
     + 'specific trade (sandwich exposure, route, fees) use zendiq_triage_swap, which returns '
     + 'this same token score inline, so screening first is optional, never required.',
   inputSchema: {
