@@ -259,6 +259,8 @@ Additional fields are experimental and may change within `v1`. Stable fields are
 
 Same request body as `/analyse` plus a `taker` public key. Returns an **unsigned** Jupiter Ultra swap `transaction` and `requestId`, the `plan` (venue, slippage, priority-fee posture), a `simulation` result, and the `netBenefit` breakdown. Zero custody — you verify, sign, and submit. Priced per call in USDC.
 
+Submit by signing `transaction` and POSTing `{ signedTransaction, requestId }` to `https://lite-api.jup.ag/ultra/v1/execute`. Jupiter Ultra sizes the priority fee and applies MEV protection itself, so submitting through your own RPC instead forfeits that protection and invalidates the `netBenefit` figures.
+
 ## Security
 
 Never commit keypairs, seeds, `.env`, budget ledgers, or RPC URLs containing credentials. This repository configures a mandatory pre-push secret scan through `.githooks/pre-push`; install either [gitleaks](https://github.com/gitleaks/gitleaks) or [trufflehog](https://github.com/trufflesecurity/trufflehog) before pushing.
