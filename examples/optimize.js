@@ -121,7 +121,8 @@ const SWAP = {
     : pf.control === 'venue_managed'
       ? (applied != null ? `${applied} lamports applied · sized by the venue` : 'sized by the venue — inside the transaction')
     : pf.control === 'ceiling' ? `${applied ?? '—'} lamports applied · ceiling ${pf.requestedLamports}`
-    : pf.control === 'exact_budget' ? `${applied ?? '—'} lamports applied · budget ${pf.requestedLamports} spent in full`
+    // Not 'spent in full': integer micro-lamport pricing rounds the budget up by 1–2 lamports.
+    : pf.control === 'exact_budget' ? `${applied ?? '—'} lamports applied · budget ${pf.requestedLamports} spent, rounded up to the compute-unit price`
     : `${applied ?? pf.requestedLamports ?? '—'} lamports`;
   console.log(`  priority fee ${pfLine}`);
   console.log(`  slippage     ${o.plan?.slippageBps ?? '—'} bps`);
