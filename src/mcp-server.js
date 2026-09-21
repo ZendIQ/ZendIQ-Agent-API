@@ -43,6 +43,7 @@ const SERVER_INFO = { name: 'zendiq-agent', version: '1.0.0' };
 const BASE_URL = (process.env.ZENDIQ_AGENT_URL ?? 'https://zendiq-backend.onrender.com').replace(/\/+$/, '');
 const ANALYSE_URL = `${BASE_URL}/v1/agent/analyse`;
 const SCREEN_URL = `${BASE_URL}/v1/agent/analyse-token`;
+const OPTIMIZE_URL = `${BASE_URL}/v1/agent/optimize`;
 const KEYPAIR_PATH = process.env.ZENDIQ_AGENT_KEYPAIR ?? null;
 const NETWORK = process.env.ZENDIQ_AGENT_NETWORK === 'mainnet' ? 'mainnet' : 'devnet';
 const DEMO_EVENTS_URL = process.env.ZENDIQ_DEMO_EVENTS_URL ?? null;
@@ -164,6 +165,89 @@ const TOOL_SCREEN = {
   },
 };
 
+const TOOL_OPTIMIZE = {
+  name: 'zendiq_optimize_swap',
+  title: 'Build an optimized Solana swap',
+  description:
+    'Build an executable Solana swap once you have already decided to trade. Returns an '
+    + 'unsigned Jupiter Ultra transaction plus the structured plan and itemised net-benefit '
+    + 'arithmetic behind it, so you can verify the bytes against the stated intent before '
+    + 'signing. Zero custody: the transaction is never signed here — you sign and submit it '
+    + 'with your own wallet. A build that fails charges nothing. Each successful call costs '
+    + '$0.02 in USDC, paid automatically via x402. '
+    + 'Use this when the decision to trade is already made and the open question is how to '
+    + 'execute it well. If the open question is still whether to trade at all, use '
+    + 'zendiq_triage_swap instead: this tool returns token risk and sandwich exposure scores '
+    + 'but NOT the Safe / Protect / Refuse verdict. '
+    + 'NETWORK: payment settles in DEVNET USDC, so an agent funded only on mainnet cannot pay '
+    + 'for this call today — fund a devnet wallet first. The swap itself is routed against '
+    + 'MAINNET liquidity, so `taker` must be a mainnet wallet that actually holds the input '
+    + 'token. Those are two different wallets today, and the returned transaction is only '
+    + 'submittable by the taker.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      inputMint: { type: 'string', description: 'Base58 mint address of the token being sold.' },
+      outputMint: { type: 'string', description: 'Base58 mint address of the token being bought.' },
+      amount: {
+        type: 'string',
+        description:
+          "Amount to sell, in the input mint's atomic units, as a decimal string. "
+          + 'For 1 SOL (9 decimals) send "1000000000".',
+      },
+      taker: {
+        type: 'string',
+        description:
+          'Base58 public key the swap is built for. Must be a mainnet wallet holding the '
+          + 'input token — the returned transaction is only submittable by this account.',
+      },
+      slippageBps: {
+        type: 'integer',
+        minimum: 0,
+        maximum: 10_000,
+        description: 'Optional slippage tolerance in basis points. Omit to use the route default.',
+      },
+    },
+    required: ['inputMint', 'outputMint', 'amount', 'taker'],
+    additionalProperties: false,
+  },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      transaction: {
+        type: 'string',
+        description: 'Unsigned base64 VersionedTransaction. Verify it against `plan` before signing.',
+      },
+      plan: {
+        type: 'object',
+        description: 'The structured intent the transaction bytes should match.',
+        properties: {
+          venue: { type: 'string' },
+          bundle: { type: 'boolean' },
+          jitoTipLamports: { type: ['integer', 'null'] },
+          slippageBps: { type: ['integer', 'null'] },
+        },
+      },
+      netBenefit: {
+        type: 'object',
+        description: 'Itemised cost arithmetic so the stated net can be checked, not trusted.',
+        properties: {
+          expectedMevLossUsd: { type: ['number', 'null'] },
+          zendiqFeeUsd: { type: ['number', 'null'] },
+          netUsd: { type: ['number', 'null'] },
+        },
+      },
+      simulation: {
+        type: 'object',
+        description: "Pre-flight simulation. `status` is 'ok', 'failed', or 'unknown' when simulation itself was unavailable.",
+        properties: { status: { type: 'string' } },
+      },
+      custody: { type: 'string' },
+    },
+    required: ['transaction', 'plan', 'netBenefit'],
+  },
+};
+
 /** @type {{httpClient: object}|null} Lazily built so a missing key fails per-call, not at boot. */
 let paymentClient = null;
 
@@ -231,15 +315,16 @@ async function getPaymentClient() {
 }
 
 /**
- * Call the analyse endpoint, paying the 402 challenge if one is issued.
+ * Call a paid endpoint, paying the 402 challenge if one is issued.
  *
+ * @param {string} url - Absolute endpoint URL.
  * @param {object} body - Validated request body.
  * @returns {Promise<object>} Parsed response body.
  */
-async function callAnalyse(body) {
+async function callPaid(url, body) {
   const startedAt = Date.now();
   await emitDemoEvent('call_started', { inputMint: body.inputMint, outputMint: body.outputMint });
-  const post = (headers = {}) => fetch(ANALYSE_URL, {
+  const post = (headers = {}) => fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'X-ZendIQ-Surface': 'mcp', ...headers },
     body: JSON.stringify(body),
@@ -353,6 +438,22 @@ function buildScreenRequest(args) {
 }
 
 /**
+ * Validate optimize arguments — the analyse fields plus the taker the swap is built for.
+ *
+ * @param {object} args - Raw tool arguments.
+ * @returns {object} Request body.
+ */
+function buildOptimizeRequest(args) {
+  const body = buildRequest(args);
+  const taker = String(args?.taker ?? '');
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(taker)) {
+    throw new Error('taker must be a base58 Solana public key — the mainnet wallet the swap is built for.');
+  }
+  body.taker = taker;
+  return body;
+}
+
+/**
  * Call the free screen endpoint. No payment: the route is not behind the x402 gate,
  * so this is a plain POST with no 402 handling.
  *
@@ -393,17 +494,22 @@ async function handle(msg) {
       return {};
 
     case 'tools/list':
-      return { tools: [TOOL, TOOL_SCREEN] };
+      return { tools: [TOOL, TOOL_SCREEN, TOOL_OPTIMIZE] };
 
     case 'tools/call': {
       const name = msg.params?.name;
-      if (name !== TOOL.name && name !== TOOL_SCREEN.name) {
+      if (name !== TOOL.name && name !== TOOL_SCREEN.name && name !== TOOL_OPTIMIZE.name) {
         throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32602 });
       }
       try {
-        const result = name === TOOL_SCREEN.name
-          ? await callScreen(buildScreenRequest(msg.params?.arguments))
-          : project(await callAnalyse(buildRequest(msg.params?.arguments)));
+        let result;
+        if (name === TOOL_SCREEN.name) {
+          result = await callScreen(buildScreenRequest(msg.params?.arguments));
+        } else if (name === TOOL_OPTIMIZE.name) {
+          result = await callPaid(OPTIMIZE_URL, buildOptimizeRequest(msg.params?.arguments));
+        } else {
+          result = project(await callPaid(ANALYSE_URL, buildRequest(msg.params?.arguments)));
+        }
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
           structuredContent: result,
@@ -412,7 +518,7 @@ async function handle(msg) {
         // Tool failures are reported in-band so the model can react, rather than as a
         // protocol error the framework swallows.
         log('tool call failed —', err.message);
-        return { content: [{ type: 'text', text: `ZendIQ triage failed: ${err.message}` }], isError: true };
+        return { content: [{ type: 'text', text: `${name} failed: ${err.message}` }], isError: true };
       }
     }
 

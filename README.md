@@ -6,7 +6,7 @@ ZendIQ gives agents a paid, machine-readable Solana swap triage verdict before t
 
 This repository contains the complete agent-facing integration surface:
 
-- MCP server for `zendiq_triage_swap`
+- MCP server exposing `zendiq_screen_token`, `zendiq_triage_swap` and `zendiq_optimize_swap`
 - x402 payment client
 - Execution client — build, verify, and submit an optimized unsigned swap (`/optimize`)
 - Autonomous candidate feed and triage loop
@@ -69,7 +69,7 @@ No ZendIQ credentials ship in this repository. `ZENDIQ_AGENT_KEYPAIR` is your ke
 
 ## Connect it to an agent (MCP)
 
-The server speaks the Model Context Protocol over stdio (newline-delimited JSON-RPC), so any MCP-capable client — Claude Desktop, Cursor, Cline, or your own harness — can call it directly. It exposes two tools, split by workflow stage:
+The server speaks the Model Context Protocol over stdio (newline-delimited JSON-RPC), so any MCP-capable client — Claude Desktop, Cursor, Cline, or your own harness — can call it directly. It exposes three tools, one per workflow stage. They are independent entry points, not a required sequence: call whichever matches the question you actually have.
 
 **`zendiq_screen_token`** — **screen** stage. Screen a token by mint alone, *before* you have a trade size (an agent scanning many fresh mints has none). **Free and rate-limited**, cacheable across callers. Returns the token risk score, its signal breakdown, `signals_resolved` coverage, and a `cache` block (`hit`, `ageSeconds`, `observedAt`) so you can decide whether to force fresh.
 
@@ -93,6 +93,20 @@ Output (`structuredContent`):
 - `reasons` — plain-language justification
 
 The full risk breakdown (token-risk factors, sandwich exposure, provenance fingerprint) is returned unchanged alongside these committed fields, so the MCP result is byte-identical to the HTTP `/analyse` response. Each call costs `$0.01` in USDC, paid automatically via x402 using the configured keypair.
+
+**`zendiq_optimize_swap`** — **execute** stage. Build an executable swap once the decision to trade is already made. Paid. Returns an unsigned Jupiter Ultra transaction plus the `plan` and itemised `netBenefit` arithmetic behind it, so the bytes can be checked against the stated intent before signing. Zero custody — nothing is signed here.
+
+| Input | Type | Required | Description |
+|---|---|---|---|
+| `inputMint` | string | yes | Base58 mint being sold |
+| `outputMint` | string | yes | Base58 mint being bought |
+| `amount` | string | yes | Amount to sell, in the input mint's atomic units |
+| `taker` | string | yes | Base58 wallet the swap is built for; must hold the input token |
+| `slippageBps` | integer | no | Slippage tolerance in basis points; omit for the route default |
+
+This tool returns token risk and sandwich exposure, but **not** the `verdict` — it assumes the decision has been taken. Call `zendiq_triage_swap` if you still need the verdict. Each call costs `$0.02` in USDC; a build that fails charges nothing.
+
+Note the network split: payment settles in **devnet** USDC, while the swap is routed against **mainnet** liquidity, so `taker` must be a mainnet wallet. Those are two different wallets today.
 
 Register it in your MCP client's config (paths must be absolute):
 
