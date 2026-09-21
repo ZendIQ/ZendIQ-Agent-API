@@ -113,6 +113,8 @@ async function main() {
   if (!sameEvidence) throw new Error('MCP and HTTP evidence fingerprints differ');
   console.log(`Analyse complete: ${mcpResult.verdict} · evidence ${mcpResult.evidence_fingerprint}`);
 
+  if (args.includes('--analyse-only')) return;
+
   // ---- Execution phase: optimize -> (sign -> execute) | stop at simulation ----
   // The swap is a mainnet Jupiter route, so the taker must hold the input token.
   // Default: stop at simulation (spends nothing). --execute signs + lands a real swap.
