@@ -7,13 +7,15 @@
  * ledger. The mapping from HTTP outcome to ledger outcome is the whole point of this
  * file, and it is deliberately asymmetric:
  *
- *   settled  — a 200 we paid for, and *any* failure after the payload left the
- *              process. Once the authorization is in flight we cannot prove it did
- *              not settle, and a ceiling that under-counts is not a ceiling.
- *   released — outcomes the server guarantees did not settle: a 402 rejection, a
+ *   settled  — a 200 we paid for, and any failure we cannot prove did not settle.
+ *              Once the authorization is in flight and the server reports having
+ *              attempted settlement, a ceiling that under-counts is not a ceiling.
+ *   released — outcomes that demonstrably did not settle: a 402 rejection, a
  *              429 (rate limits are checked ahead of the payment gate, so the
- *              authorization is not burned), a 409 replay refusal, and any local
- *              failure before the payload was sent.
+ *              authorization is not burned), a 409 replay refusal, any local
+ *              failure before the payload was sent, and any failure carrying no
+ *              settlement header — the server cancels settlement whenever the
+ *              handler errors, so no transfer was ever attempted.
  *
  * A replayed 200 is released, not settled: the server served it from cache and took
  * no second payment, so charging our own budget twice would be our error, not the
@@ -73,6 +75,7 @@ class ZendIQClient {
     this.baseUrl = (opts.baseUrl ?? 'https://zendiq-backend.onrender.com').replace(/\/$/, '');
     this.budget = opts.budget;
     this.network = opts.network ?? 'devnet';
+    this.debugKey = opts.debugKey ?? null;
     this.onEvent = typeof opts.onEvent === 'function' ? opts.onEvent : () => {};
     this.caip2 = this.network === 'mainnet' ? SOLANA_MAINNET_CAIP2 : SOLANA_DEVNET_CAIP2;
 
@@ -205,7 +208,11 @@ class ZendIQClient {
       // landed. Charging ourselves matches the network_error case above — under-counting a
       // real payment is the worse error, because the ceiling stops protecting anything.
       this.budget.settle(reservation, { note: 'unconfirmed_settlement_may_have_landed' });
-    } else if (response.status === 402 || response.status === 429 || response.status === 409) {
+    } else if (!settlement || settleError) {
+      // No settlement header means settlement was cancelled before it was attempted —
+      // the server does that whenever the handler errors. A settleError surviving the
+      // branch above is an explicit "did not settle". Charging either burns a ceiling
+      // that guards real spend: verified devnet 21 Sep 2026, seven 502s moved nothing.
       this.budget.release(reservation, `not_settled_${response.status}`);
     } else {
       this.budget.settle(reservation, { note: `unresolved_${response.status}` });
@@ -241,7 +248,11 @@ class ZendIQClient {
     const url = `${this.baseUrl}/v1/agent/optimize`;
     const send = (headers = {}) => fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...headers },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.debugKey ? { 'X-ZendIQ-Debug-Key': this.debugKey } : {}),
+        ...headers,
+      },
       body: JSON.stringify(swap),
     });
 
@@ -289,9 +300,20 @@ class ZendIQClient {
     const settlement = decodeHeader(response.headers.get('PAYMENT-RESPONSE'));
     const replayed = body?.replayed === true;
 
+    // A verification failure comes back as a fresh challenge in PAYMENT-REQUIRED; a
+    // settlement failure reports in PAYMENT-RESPONSE. The body is empty on both, so
+    // reading neither reduces every rejection to a bare `http 402`.
+    const rejection = response.ok ? null : decodeHeader(response.headers.get('PAYMENT-REQUIRED'));
+    const settleError = !response.ok && settlement?.success === false
+      ? settlement.errorReason ?? settlement.error
+      : null;
+
     if (response.ok && replayed) this.budget.release(reservation, 'served_from_cache_no_second_payment');
     else if (response.ok) this.budget.settle(reservation, { note: settlement?.transaction || 'settled' });
-    else if (response.status === 402 || response.status === 429 || response.status === 409) this.budget.release(reservation, `not_settled_${response.status}`);
+    // Ambiguous, not a refusal — also covers a settlement that landed but was not confirmed.
+    else if (settleError === 'transaction_failed') this.budget.settle(reservation, { note: 'unconfirmed_settlement_may_have_landed' });
+    // No settlement header means the server cancelled settlement before attempting it.
+    else if (!settlement || settleError) this.budget.release(reservation, `not_settled_${response.status}`);
     else this.budget.settle(reservation, { note: `unresolved_${response.status}` });
 
     if (response.ok) {
@@ -302,6 +324,7 @@ class ZendIQClient {
         simulation: body.simulation?.status ?? null,
         outAmount: body.plan?.route?.outAmount ?? null,
         priorityFee: body.plan?.priorityFee ?? null,
+        submitMethod: body.submit?.method ?? null,
         hasTransaction: typeof body.transaction === 'string' && body.transaction.length > 100,
         requestId: body.requestId ?? null,
       });
@@ -309,11 +332,18 @@ class ZendIQClient {
       await onEvent('call_failed', { status: response.status });
     }
 
+    // `error` is the code and `message` the detail; reporting only the code turns an
+    // actionable upstream failure into an opaque one-word string.
+    const bodyError = body.error && body.message ? `${body.error}: ${body.message}` : (body.error ?? body.message);
+
     return {
       ok: response.ok,
       status: response.status,
       order: response.ok ? body : undefined,
-      error: response.ok ? undefined : (body.error ?? body.message ?? `http ${response.status}`),
+      error: response.ok
+        ? undefined
+        : (rejection?.errorReason ?? rejection?.error ?? settleError
+          ?? bodyError ?? `http ${response.status}`),
       paidUsd: response.ok && !replayed ? priceUsd : 0,
       replayed,
     };
@@ -321,19 +351,90 @@ class ZendIQClient {
 }
 
 /**
- * Sign an unsigned Jupiter order and submit it via Jupiter's /execute.
+ * Sign an unsigned Jupiter order and submit it by the venue's own route.
+ *
+ * /optimize picks between two Jupiter venues, and they do not submit the same way:
+ * Ultra is broadcast by Jupiter via /execute and needs the requestId, while a Swap API
+ * transaction has no requestId and is sent to an RPC. The response says which, so this
+ * follows `submit.method` rather than assuming one.
  *
  * Uses partiallySignTransaction because JupiterZ (RFQ) routes require a market-maker
  * co-signature that /execute adds — a fully-signed tx would be rejected on those routes.
  *
- * @param {object} params - { order, signer, executeUrl }.
+ * @param {object} params - { order, signer, executeUrl, rpcUrl }.
  * @returns {Promise<{ok: boolean, status: string, code?: number, signature: string|null, error: string|null}>} Result.
  */
-async function signAndExecute({ order, signer, executeUrl = 'https://lite-api.jup.ag/ultra/v1/execute' }) {
+/**
+ * Poll until the signature is confirmed, failed, or the window closes.
+ *
+ * An unconfirmed result is reported as not-ok with the signature attached, so a dropped
+ * transaction reads as unresolved rather than as a success.
+ */
+async function confirmSignature(rpcUrl, signature, { timeoutMs = 45_000, intervalMs = 1500 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    let body;
+    try {
+      const res = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getSignatureStatuses',
+          params: [[signature], { searchTransactionHistory: true }],
+        }),
+      });
+      body = await res.json();
+    } catch (err) {
+      lastError = err.message;
+      continue;
+    }
+    const status = body.result?.value?.[0];
+    if (!status) continue;
+    if (status.err) return { ok: false, status: 'Failed', error: JSON.stringify(status.err).slice(0, 200) };
+    if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+      return { ok: true, status: 'Success', error: null };
+    }
+  }
+  return { ok: false, status: 'Unconfirmed', error: lastError ?? `not confirmed within ${Math.round(timeoutMs / 1000)}s — check the signature on Solscan` };
+}
+
+async function signAndExecute({
+  order,
+  signer,
+  executeUrl = 'https://lite-api.jup.ag/ultra/v1/execute',
+  rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+}) {
   const txBytes = Uint8Array.from(Buffer.from(order.transaction, 'base64'));
   const decoded = getTransactionDecoder().decode(txBytes);
   const signed = await partiallySignTransaction([signer.keyPair], decoded);
   const signedTransaction = getBase64EncodedWireTransaction(signed);
+
+  if (order.submit?.method === 'rpc_send_transaction' || !order.requestId) {
+    const res = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'sendTransaction',
+        params: [signedTransaction, { encoding: 'base64', skipPreflight: false, maxRetries: 3 }],
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    const signature = body.result ?? null;
+    if (signature == null) {
+      // A JSON-RPC rejection rides inside a 200, so the HTTP status alone would label it 'rpc_200'.
+      const status = body.error ? 'Rejected' : `rpc_${res.status}`;
+      return { ok: false, status, code: body.error?.code, signature: null, error: body.error?.message ?? null };
+    }
+    // sendTransaction returns once the node accepts the bytes, which is not inclusion.
+    const confirmed = await confirmSignature(rpcUrl, signature);
+    return { ok: confirmed.ok, status: confirmed.status, signature, error: confirmed.error };
+  }
 
   const res = await fetch(executeUrl, {
     method: 'POST',

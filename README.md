@@ -94,7 +94,7 @@ Output (`structuredContent`):
 
 The full risk breakdown (token-risk factors, sandwich exposure, provenance fingerprint) is returned unchanged alongside these committed fields, so the MCP result is byte-identical to the HTTP `/analyse` response. Each call costs `$0.01` in USDC, paid automatically via x402 using the configured keypair.
 
-**`zendiq_optimize_swap`** — **execute** stage. Build an executable swap once the decision to trade is already made. Paid. Returns an unsigned Jupiter Ultra transaction plus the `plan` and itemised `netBenefit` arithmetic behind it, so the bytes can be checked against the stated intent before signing. Zero custody — nothing is signed here.
+**`zendiq_optimize_swap`** — **execute** stage. Build an executable swap once the decision to trade is already made. Paid. Returns an unsigned Jupiter transaction plus the `plan` and itemised `netBenefit` arithmetic behind it, so the bytes can be checked against the stated intent before signing. Zero custody — nothing is signed here.
 
 | Input | Type | Required | Description |
 |---|---|---|---|
@@ -157,7 +157,7 @@ The autonomous agent is advisory — it reports the recommended path and fees wi
 
 ## Execution — build a signable swap (`/optimize`)
 
-`/analyse` is advisory. `/optimize` goes one step further: it returns an **unsigned** swap transaction built through Jupiter Ultra, with the priority-fee and MEV posture chosen from the same risk model — plus the plan, an on-chain simulation, and the net-benefit arithmetic. You verify the bytes against the stated plan, then sign and submit with your own wallet. ZendIQ never holds a key.
+`/analyse` is advisory. `/optimize` goes one step further: it returns an **unsigned** swap transaction built through Jupiter, with the venue, priority fee and MEV posture chosen from the same risk model — plus the plan, an on-chain simulation, and the net-benefit arithmetic. You verify the bytes against the stated plan, then sign and submit with your own wallet. ZendIQ never holds a key.
 
 ```powershell
 npm run budget:init
@@ -169,7 +169,7 @@ $env:ZENDIQ_TAKER_KEYPAIR = 'C:\path\to\mainnet-keypair.json'
 npm run optimize -- --taker <YOUR_MAINNET_PUBKEY> --execute
 ```
 
-The swap routes on **mainnet** (Jupiter Ultra has no devnet), so `--taker` must be a wallet that holds the input token; the x402 payment stays on devnet USDC. By default the example **stops at simulation and spends nothing on-chain** — pass `--execute` (with `ZENDIQ_TAKER_KEYPAIR`) to sign and land a real swap. The response carries the unsigned `transaction`, `requestId`, the `plan`, the `simulation` result, and the `netBenefit` breakdown — everything needed to confirm the transaction matches the stated intent before signing.
+The swap routes on **mainnet** (Jupiter has no devnet), so `--taker` must be a wallet that holds the input token; the x402 payment stays on devnet USDC. By default the example **stops at simulation and spends nothing on-chain** — pass `--execute` (with `ZENDIQ_TAKER_KEYPAIR`) to sign and land a real swap. The response carries the unsigned `transaction`, the `plan`, the `submit` instructions for the chosen venue, the `simulation` result, and the `netBenefit` breakdown — everything needed to confirm the transaction matches the stated intent before signing.
 
 ## Demo visualizer
 
@@ -257,9 +257,11 @@ Additional fields are experimental and may change within `v1`. Stable fields are
 
 `POST /v1/agent/optimize`
 
-Same request body as `/analyse` plus a `taker` public key. Returns an **unsigned** Jupiter Ultra swap `transaction` and `requestId`, the `plan` (venue, slippage, priority-fee posture), a `simulation` result, and the `netBenefit` breakdown. Zero custody — you verify, sign, and submit. Priced per call in USDC.
+Same request body as `/analyse` plus a `taker` public key. Returns an **unsigned** Jupiter swap `transaction`, the `plan` (venue, slippage, priority fee), a `simulation` result, and the `netBenefit` breakdown. Zero custody — you verify, sign, and submit. Priced per call in USDC.
 
-Submit by signing `transaction` and POSTing `{ signedTransaction, requestId }` to `https://lite-api.jup.ag/ultra/v1/execute`. Jupiter Ultra sizes the priority fee and applies MEV protection itself, so submitting through your own RPC instead forfeits that protection and invalidates the `netBenefit` figures.
+The venue is chosen by risk, so read `plan.venue` rather than assuming one. **Jupiter Ultra** is used for low-risk trades and for sandwich-driven risk, where its upstream MEV protection is the instrument that addresses the exposure; it sizes the priority fee itself. The **Jupiter Swap API** (Quote + Build) is used when risk scoring calls for a specific priority fee, which Ultra cannot honour — there `plan.priorityFee` reports the fee actually applied, read back out of the build, and the route carries no upstream MEV protection.
+
+**Submission differs by venue** — follow the returned `submit` object rather than hardcoding a path. On `jupiter_ultra`, sign `transaction` and POST `{ signedTransaction, requestId }` to `https://lite-api.jup.ag/ultra/v1/execute`; submitting through your own RPC instead forfeits Ultra's MEV protection and invalidates the `netBenefit` figures. On `jupiter_swap` there is no `requestId` (it is `null`) and no `/execute` step — sign and send to your own RPC, with the priority fee already inside the transaction.
 
 ## Security
 

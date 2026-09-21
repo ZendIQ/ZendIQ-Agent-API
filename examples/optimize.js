@@ -38,7 +38,7 @@ const valueFor = (flag, fallback) => {
 const doExecute = args.includes('--execute');
 
 const SWAP = {
-  inputMint: 'So11111111111111111111111111111111111111112',
+  inputMint: valueFor('--input', 'So11111111111111111111111111111111111111112'),
   outputMint: valueFor('--mint', 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'),
   amount: valueFor('--amount', '3000000'),
   slippageBps: Number(valueFor('--slippage', '100')),
@@ -63,10 +63,18 @@ const SWAP = {
   console.log(`  taker   ${taker}`);
   console.log(`  ${budget.banner()}\n`);
 
-  const client = new ZendIQClient({ signer, budget, baseUrl: BASE_URL, network: NETWORK, rpcUrl: RPC_URL });
+  const debugVenue = valueFor('--venue', null);
+  const client = new ZendIQClient({
+    signer, budget, baseUrl: BASE_URL, network: NETWORK, rpcUrl: RPC_URL,
+    debugKey: process.env.ZENDIQ_DEBUG_KEY ?? null,
+  });
 
-  console.log(`optimize  ${SWAP.amount} lamports SOL -> ${SWAP.outputMint.slice(0, 4)}…`);
-  const result = await client.optimise({ ...SWAP, taker });
+  if (debugVenue && !process.env.ZENDIQ_DEBUG_KEY) {
+    console.error('\n  --venue requires ZENDIQ_DEBUG_KEY (must match AGENT_DEBUG_KEY on the server).\n');
+    process.exit(1);
+  }
+  console.log(`optimize  ${SWAP.amount} ${SWAP.inputMint.slice(0, 4)}… -> ${SWAP.outputMint.slice(0, 4)}…${debugVenue ? `  [forced venue: ${debugVenue}]` : ''}`);
+  const result = await client.optimise({ ...SWAP, taker, ...(debugVenue ? { debugVenue } : {}) });
 
   if (!result.ok) {
     console.log(`  ${result.status}  ${result.error}`);
@@ -77,10 +85,35 @@ const SWAP = {
   const o = result.order;
   console.log(`  ${result.status}  paid $${result.paidUsd.toFixed(4)}${result.replayed ? ' (replayed)' : ''}`);
   console.log(`\n  venue        ${o.plan?.venueLabel ?? o.plan?.venue}`);
-  console.log(`  priority fee ${o.plan?.priorityFee ?? '—'}`);
+  if (o.plan?.override) {
+    console.log(`  OVERRIDE     forced ${o.plan.override.forcedVenue} — risk would have used ${o.plan.override.riskVenue}`);
+  }
+  // plan.priorityFee.control says what requestedLamports means, so the figure is never
+  // printed without the qualifier that makes it true.
+  const pf = o.plan?.priorityFee;
+  const applied = pf?.appliedLamports;
+  const pfLine = pf == null ? '—'
+    : pf.control === 'venue_managed'
+      ? (applied != null ? `${applied} lamports applied · sized by the venue` : 'sized by the venue — inside the transaction')
+    : pf.control === 'ceiling' ? `${applied ?? '—'} lamports applied · ceiling ${pf.requestedLamports}`
+    : pf.control === 'exact_budget' ? `${applied ?? '—'} lamports applied · budget ${pf.requestedLamports} spent in full`
+    : `${applied ?? pf.requestedLamports ?? '—'} lamports`;
+  console.log(`  priority fee ${pfLine}`);
   console.log(`  slippage     ${o.plan?.slippageBps ?? '—'} bps`);
-  console.log(`  simulation   ${o.simulation?.status}${o.simulation?.unitsConsumed ? ` (${o.simulation.unitsConsumed} CU)` : ''}`);
-  console.log(`  net benefit  ${o.netBenefit?.netUsd != null ? `$${o.netBenefit.netUsd.toFixed(4)}` : '—'}`);
+  // Printed in every state. An omitted risk line reads as "nothing to report", which is
+  // indistinguishable from "screening never ran" — the case most worth seeing.
+  const tr = o.tokenRisk ?? {};
+  console.log(`  token risk   ${tr.available === false
+    ? `UNAVAILABLE — sized as ${tr.assumedLevel ?? 'HIGH'} (${tr.error ?? 'unknown'})`
+    : `${tr.score ?? '—'} ${tr.level ?? ''}${tr.symbol ? ` (${tr.symbol})` : ''}`}`);
+  const sim = o.simulation ?? {};
+  const simDetail = sim.unitsConsumed ? ` (${sim.unitsConsumed} CU)` : (sim.reason ? ` (${sim.reason})` : '');
+  console.log(`  simulation   ${sim.status}${simDetail}`);
+  const netBasis = {
+    not_claimed_on_this_route: 'not claimed on this route',
+    unavailable_no_mev_estimate: 'no MEV estimate available',
+  }[o.netBenefit?.netUsdBasis] ?? 'unavailable';
+  console.log(`  net benefit  ${o.netBenefit?.netUsd != null ? `$${o.netBenefit.netUsd.toFixed(4)}` : `— ${netBasis}`}`);
   console.log(`  transaction  ${typeof o.transaction === 'string' ? `${o.transaction.length} bytes (unsigned)` : 'none'}`);
   console.log(`  custody      ${o.custody}`);
 
@@ -89,6 +122,17 @@ const SWAP = {
     console.log('  Re-run with --execute (and ZENDIQ_TAKER_KEYPAIR set) to land it.\n');
     console.log(`  ${budget.banner()}\n`);
     return;
+  }
+
+  // A degraded simulation is not a pass. Signing here broadcasts a transaction nothing
+  // verified, and the public RPC 429s often enough that this is routine, not an edge case.
+  if (sim.status !== 'ok' && !args.includes('--force-unsimulated')) {
+    console.error(`\n  Refusing to sign — simulation did not pass (${sim.status}${sim.reason ? `: ${sim.reason}` : ''}).`);
+    if (sim.err) console.error(`  error        ${JSON.stringify(sim.err)}`);
+    if (sim.logs?.length) for (const l of sim.logs) console.error(`  log          ${l}`);
+    console.error('  Re-run to simulate again, or pass --force-unsimulated to sign without verification.');
+    console.error(`\n  ${budget.banner()}\n`);
+    process.exit(1);
   }
 
   const takerKeyFile = process.env.ZENDIQ_TAKER_KEYPAIR;
@@ -102,12 +146,19 @@ const SWAP = {
     process.exit(1);
   }
 
-  console.log('\n  Signing and submitting via Jupiter…');
+  const viaRpc = o.submit?.method === 'rpc_send_transaction';
+  if (tr.available === false) {
+    console.warn(`\n  Note: this token was never screened (${tr.error ?? 'unknown'}).`);
+    console.warn(`  Fees were sized as ${tr.assumedLevel ?? 'HIGH'}, but nothing is known about the asset itself.`);
+  }
+  console.log(`\n  Signing and submitting via ${viaRpc ? 'RPC' : 'Jupiter'}…`);
   const exec = await signAndExecute({ order: o, signer: takerSigner.signer });
   if (exec.ok) {
     console.log(`  landed     https://solscan.io/tx/${exec.signature}`);
   } else {
     console.log(`  failed     ${exec.status}${exec.error ? ` — ${exec.error}` : ''}`);
+    // An unconfirmed send still has a signature worth checking; losing it would strand the trade.
+    if (exec.signature) console.log(`  signature  https://solscan.io/tx/${exec.signature}`);
   }
   console.log(`\n  ${budget.banner()}\n`);
 })();
