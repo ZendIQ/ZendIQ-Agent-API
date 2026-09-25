@@ -22,33 +22,48 @@ This repository contains no extension analytics, user telemetry, production depl
 
 - Node.js 22.5 or newer
 - A Solana keypair holding devnet USDC for paid calls
-- A ZendIQ Agent API endpoint. Both the MCP server and the examples default to ZendIQ's hosted API at `https://zendiq-backend.onrender.com` — see [Where your calls go](#where-your-calls-go) before running anything. Point `ZENDIQ_AGENT_URL` (MCP) or `ZENDIQ_API_URL` (examples) at your own instance to avoid that.
+- Network access to ZendIQ's hosted API at `https://zendiq-backend.onrender.com`, where scoring runs — see [Where your calls go](#where-your-calls-go) before running anything.
 
 ## Quickstart
 
+Everything below runs on your machine. The only calls to ZendIQ are the scoring and `/optimize` requests to the hosted API; no URL needs setting for those.
+
+**1. Install, set a local spend ceiling, and create the agent's devnet key.** `budget:init` writes a `$1.00` ledger and creates `runtime/`; the second command writes a throwaway key there and prints its address. Neither makes a network call or spends anything.
+
 ```powershell
 npm ci
-Copy-Item .env.example .env
-$env:ZENDIQ_AGENT_KEYPAIR = 'C:\path\to\devnet-keypair.json'
-$env:ZENDIQ_AGENT_URL = 'https://zendiq-backend.onrender.com'
+npm run budget:init
+node -e "require('./examples/keys').loadAgentSigner({network:'devnet'}).then(k=>console.log('Fund this address:',k.address))"
+```
+
+**2. Fund that address with devnet USDC** at <https://faucet.circle.com> (network **Solana Devnet**). No SOL is needed — the x402 facilitator pays the network fee. 10 USDC covers ~1,000 calls at `$0.01`.
+
+**3. Make one paid call:**
+
+```powershell
+npm run analyse
+```
+
+**4. Run the MCP server with the same key:**
+
+```powershell
+$env:ZENDIQ_AGENT_KEYPAIR = "$PWD\runtime\agent-devnet.key.json"
 npm run mcp
 ```
 
 The MCP server uses newline-delimited JSON-RPC over stdio. Diagnostics go to stderr so stdout remains a valid MCP transport.
 
-Run the example paid call after setting the same keypair and endpoint:
+Set variables in your shell. Nothing in this repository loads a `.env` file; `.env.example` only lists the variables for reference.
 
-```powershell
-$env:ZENDIQ_API_URL = $env:ZENDIQ_AGENT_URL
-npm run budget:init
-npm run analyse
-```
-
-The example generates its own throwaway key on first run and uses a `$1.00` local budget. Fund the printed address with devnet USDC before making the paid call.
+The first call after the hosted API has been idle can take 30 seconds or more while it wakes; later calls are fast. A slow first call is not a failure.
 
 ## Where your calls go
 
-**Everything in this repository is a client.** The MCP server, despite the name, is a local stdio adapter that forwards to an HTTP API over the network — it does not analyse anything itself. The scoring engine runs server-side.
+**Runs on your machine:** the MCP server (a local stdio adapter), x402 payment signing, the budget ledger, the candidate feed, the triage loop, transaction verification and signing, and the demo visualizer.
+
+**Calls ZendIQ's hosted API:** token screening, `/analyse` and `/optimize`. The scoring engine is not in this repository and has no local mode — every score comes from the hosted API.
+
+**Calls third parties directly:** DexScreener (candidate feed), Jupiter `/execute` and a Solana RPC (only when you pass `--execute`), and the x402 facilitator (payment settlement).
 
 **The default endpoint is ZendIQ's live hosted API.** If you clone this repo and run it without setting a URL, your calls hit our production service and are billed as real x402 payments:
 
@@ -58,12 +73,12 @@ const BASE_URL = process.env.ZENDIQ_API_URL ?? 'https://zendiq-backend.onrender.
 
 That default is deliberate — it makes the quickstart work without infrastructure. It is not a sandbox. Two consequences worth understanding before you run a loop:
 
-- **Payments are real settlements**, on whichever rail `ZENDIQ_AGENT_NETWORK` names. They are cheap and currently settle in devnet USDC, but they are on-chain transactions, not mocks.
+- **Payments are real settlements**, on whichever rail the network variable names — `ZENDIQ_AGENT_NETWORK` for the MCP server, `AGENT_NETWORK` for the examples and the demo runner. They are cheap and currently settle in devnet USDC, but they are on-chain transactions, not mocks.
 - **`npm run watch` is an autonomous loop.** It pays per candidate until the local budget ceiling stops it. Set `budget:init` deliberately; it is the only thing bounding spend.
 
-To keep test traffic off our service, set the URL to your own instance — `ZENDIQ_AGENT_URL` for the MCP server, `ZENDIQ_API_URL` for the examples. Note these are two separate variables reading two separate code paths; setting one does not affect the other.
+The endpoint can be overridden — `ZENDIQ_AGENT_URL` for the MCP server, `ZENDIQ_API_URL` for the examples and the demo runner — but it must point at a ZendIQ Agent API. These are two separate variables reading two separate code paths; setting one does not affect the other. The demo runner is the exception: it passes its `ZENDIQ_API_URL` to the MCP server it spawns, so there `ZENDIQ_AGENT_URL` is ignored.
 
-**Payment rail:** `ZENDIQ_AGENT_NETWORK` defaults to `devnet`, and the hosted API settles in **devnet USDC** today. A wallet funded only on mainnet cannot pay for a call, even though the market data being analysed is mainnet. Fund a devnet wallet first.
+**Payment rail:** `ZENDIQ_AGENT_NETWORK` (MCP) and `AGENT_NETWORK` (examples) both default to `devnet`, and the hosted API settles in **devnet USDC** today. A wallet funded only on mainnet cannot pay for a call, even though the market data being analysed is mainnet. Fund a devnet wallet first.
 
 No ZendIQ credentials ship in this repository. `ZENDIQ_AGENT_KEYPAIR` is your key, signs your payments, and never leaves your machine.
 
@@ -164,12 +179,12 @@ npm run budget:init
 # Stop at simulation — pays $0.02 USDC, prints the plan + simulation, signs nothing:
 npm run optimize -- --taker <YOUR_MAINNET_PUBKEY>
 
-# Real landing — signs the returned tx and submits via Jupiter:
+# Real landing — signs the returned tx and submits it as the response's submit block directs:
 $env:ZENDIQ_TAKER_KEYPAIR = 'C:\path\to\mainnet-keypair.json'
 npm run optimize -- --taker <YOUR_MAINNET_PUBKEY> --execute
 ```
 
-The swap routes on **mainnet** (Jupiter has no devnet), so `--taker` must be a wallet that holds the input token; the x402 payment stays on devnet USDC. By default the example **stops at simulation and spends nothing on-chain** — pass `--execute` (with `ZENDIQ_TAKER_KEYPAIR`) to sign and land a real swap. The response carries the unsigned `transaction`, the `plan`, the `submit` instructions for the chosen venue, the `simulation` result, and the `netBenefit` breakdown — everything needed to confirm the transaction matches the stated intent before signing.
+The swap routes on **mainnet** (Jupiter has no devnet), so `--taker` must be a wallet that holds the input token; the x402 payment stays on devnet USDC. By default the example **stops at simulation and spends nothing on-chain** — pass `--execute` (with `ZENDIQ_TAKER_KEYPAIR`) to sign and land a real swap. On `jupiter_ultra` the example submits through Jupiter's `/execute`; on `jupiter_swap` it sends through `SOLANA_RPC_URL`, which defaults to the public mainnet RPC. The response carries the unsigned `transaction`, the `plan`, the `submit` instructions for the chosen venue, the `simulation` result, and the `netBenefit` breakdown — everything needed to confirm the transaction matches the stated intent before signing.
 
 ## Demo visualizer
 
@@ -178,28 +193,10 @@ A local spectator view that renders one real swap-triage call as a live, animate
 ### Prerequisites
 
 - Node.js 22.5+ and `npm ci` already run.
-- A reachable ZendIQ Agent API endpoint (set `ZENDIQ_AGENT_URL`; defaults to `http://127.0.0.1:3000`).
-- A devnet keypair funded with **USDC** — see funding below. **No SOL is required.**
+- The funded devnet key from the [Quickstart](#quickstart), steps 1–2. The runner uses the same `runtime/agent-devnet.key.json`; it signs USDC payment authorizations only and never leaves `runtime/` (gitignored). **No SOL is required.**
+- The visualizer and runner run locally; the calls they display go to the hosted API. The runner reads `ZENDIQ_API_URL` and hands the same URL to its MCP lane, so `ZENDIQ_AGENT_URL` has no effect here.
 
-### Step 1 — create the demo wallet
-
-The runner signs with a throwaway devnet key at `runtime/agent-devnet.key.json`. Generate it and print its public address (no servers needed for this step):
-
-```powershell
-node -e "const p=require('path');require('./examples/keys').loadAgentSigner({network:'devnet',file:p.join('runtime','agent-devnet.key.json')}).then(k=>console.log('Fund this address:',k.address))"
-```
-
-The key never leaves `runtime/` (gitignored). It signs USDC payment authorizations only.
-
-### Step 2 — fund it with devnet USDC (no SOL needed)
-
-The x402 facilitator sponsors the network fee, so the wallet only needs USDC, not SOL. Get devnet USDC from Circle's faucet — it also creates the token account for you:
-
-1. Open <https://faucet.circle.com>
-2. Select network **Solana Devnet**
-3. Paste the address from Step 1 and request (10 USDC = ~1,000 calls at `$0.01` each)
-
-### Step 3 — run it
+### Run it
 
 Start the visualizer in one terminal:
 
@@ -220,7 +217,7 @@ Both lanes fill in — request → `402` → USDC authorization signed → payme
 ### Troubleshooting
 
 - **`Preflight failed` / `fetch failed`** — the runner needs both the Agent API and the visualizer (`npm run demo`) up at the same time. Start the visualizer first and leave it running.
-- **`Payment was rejected`** — the wallet holds no devnet USDC (fund it, Step 2), or, if you run your own endpoint, the endpoint's `payTo` address has no USDC token account. The x402 settlement is an SPL transfer, so the destination must already have an account for that mint; the facilitator does not create it. Point `payTo` at an address that already holds that USDC, or create its token account once.
+- **`Payment was rejected`** — the wallet holds no devnet USDC. Fund it ([Quickstart](#quickstart), step 2) and re-run; a rejected payment is never charged.
 - **UI stays on "Waiting for an agent call…"** — the page is passive; it only fills once `demo:run` emits events. Confirm the runner printed `Demo complete`.
 
 ## Contract
@@ -262,6 +259,17 @@ Same request body as `/analyse` plus a `taker` public key. Returns an **unsigned
 The venue is chosen by risk, so read `plan.venue` rather than assuming one. **Jupiter Ultra** is used for low-risk trades and for sandwich-driven risk, where its upstream MEV protection is the instrument that addresses the exposure; it sizes the priority fee itself. The **Jupiter Swap API** (Quote + Build) is used when risk scoring calls for a specific priority fee, which Ultra cannot honour — there `plan.priorityFee` reports the fee actually applied, read back out of the build, and the route carries no upstream MEV protection.
 
 **Submission differs by venue** — follow the returned `submit` object rather than hardcoding a path. On `jupiter_ultra`, sign `transaction` and POST `{ signedTransaction, requestId }` to `https://lite-api.jup.ag/ultra/v1/execute`; submitting through your own RPC instead forfeits Ultra's MEV protection and invalidates the `netBenefit` figures. On `jupiter_swap` there is no `requestId` (it is `null`) and no `/execute` step — sign and send to your own RPC, with the priority fee already inside the transaction.
+
+`/optimize` does not return a verdict and does not refuse a trade: it builds a transaction even for a token that scores `CRITICAL`. Check `tokenRisk.level` before signing, or call `/analyse` first.
+
+### When token screening does not complete
+
+Screening can time out or fail upstream. Neither endpoint blocks on it — both still return `200` — but the gap is always explicit, never a clean-looking score:
+
+- `tokenRisk` is `{ mint, available: false, error, assumedScore: 50, assumedLevel: "HIGH", note }`, with no `score` or `level`.
+- Fees and overall risk are sized as if the token scored `HIGH`, not as if it scored 0.
+- `/analyse` fails closed: `verdict` is `Protect` with `confidence: "low"`, `degraded` contains `token_screening:<reason>`, and `reasons` states that screening did not complete. A `Protect` reached this way means the token was **not checked**, not that it was found risky.
+- `/optimize` still returns a transaction. The example prints `token risk UNAVAILABLE` and warns before signing, but does not refuse — check `tokenRisk.available` yourself if your agent should.
 
 ## Security
 

@@ -50,6 +50,8 @@ async function loadAgentSigner(opts = {}) {
 
   const seed = new Uint8Array(crypto.randomBytes(32));
   const signer = await createKeyPairSignerFromPrivateKeyBytes(seed);
+  // runtime/ is gitignored, so a fresh clone does not have it.
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({
     _warning: 'THROWAWAY TEST KEY. Not for mainnet. Gitignored.',
     network,
