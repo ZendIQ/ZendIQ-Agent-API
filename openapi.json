@@ -582,7 +582,7 @@
                   "expectedMevLossUsd": { "type": ["number", "null"] },
                   "priorityFee": {
                     "type": ["string", "number", "null"],
-                    "description": "A string on jupiter_ultra, where the fee is venue-managed and not reported separately. On other venues, the applied fee in USD, or null when no SOL price was available."
+                    "description": "A string on jupiter_ultra, where the fee is venue-managed; its decoded amount is in plan.priorityFee. On other venues, the applied fee in USD, or null when no SOL price was available."
                   },
                   "jitoTipUsd": { "type": "number" },
                   "zendiqFeeUsd": { "type": ["number", "null"] },
@@ -707,10 +707,11 @@
             "enum": ["venue_managed", "ceiling", "exact_budget"]
           },
           "requestedLamports": { "type": ["integer", "null"] },
-          "appliedLamports": { "type": ["integer", "null"], "description": "Null on jupiter_ultra: the fee is inside the transaction and not reported separately." },
+          "appliedLamports": { "type": ["integer", "null"], "description": "The priority fee decoded from the built transaction's ComputeBudget instructions. Null only when those could not be read, in which case nothing in this object is a verified charge." },
           "appliedUsd": { "type": ["number", "null"] },
           "microLamports": { "type": ["integer", "null"] },
           "computeUnitLimit": { "type": ["integer", "null"] },
+          "feePayer": { "type": ["string", "null"], "description": "Present on jupiter_ultra. The transaction's fee payer. When it is not your taker (a gasless fill), Jupiter pays the decoded fee, not your wallet." },
           "solPriceUsd": { "type": ["number", "null"] },
           "solPriceSource": { "type": ["string", "null"] },
           "note": { "type": "string" }
