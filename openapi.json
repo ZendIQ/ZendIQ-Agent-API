@@ -183,7 +183,7 @@
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
       "OptimizeUnavailable": {
-        "description": "No venue could build a transaction for this trade, including after falling back. `causes` names what each venue returned. You were not charged. Error code `optimize_unavailable`.",
+        "description": "No transaction is returned, and you were not charged. Error code `optimize_unavailable`; `causes` names what each venue returned. Raised when: no venue could build a transaction, including after falling back; the Jupiter route could not be priced and Ultra could not be built (an unprotected direct venue is never substituted for it); the built transaction's programs contradict its venue, or a bundle carries no Jito tip; or the built transaction's venue could not be verified from its bytes.",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
       "AnalysisUnavailable": {
@@ -345,9 +345,9 @@
             "properties": {
               "score": { "type": "number" },
               "level": { "$ref": "#/components/schemas/RiskLevel" },
-              "estimatedLossPercentage": { "type": ["number", "null"] },
-              "estimatedLossUsd": { "type": ["number", "null"] },
-              "confidence": { "type": ["string", "null"] },
+              "estimatedLossPercentage": { "type": ["number", "null"], "description": "A model estimate, not a measurement: the sandwich risk score maps to a fixed share of the trade (score 80+: 2%, 60+: 0.8%, 40+: 0.3%, 20+: 0.05%, below 20: 0.01%). If a trade is sandwiched, the loss is bounded by its slippage tolerance, not by this figure." },
+              "estimatedLossUsd": { "type": ["number", "null"], "description": "estimatedLossPercentage applied to the trade value. A model estimate, not a measurement." },
+              "confidence": { "type": ["string", "null"], "description": "high when pool liquidity was known when scoring, or when the fill is off-chain (RFQ: there is no pool to sandwich); medium otherwise." },
               "factors": { "type": "array", "items": { "type": "object" } }
             },
             "required": ["score", "level"]
@@ -508,7 +508,7 @@
               },
               "sandwichExposure": {
                 "$ref": "#/components/schemas/SandwichExposure",
-                "description": "Reduced here: /optimize returns score, level and the two estimatedLoss fields only. The confidence and factors fields are carried by /analyse, not by this endpoint."
+                "description": "Reduced here: /optimize returns score, level, the two estimatedLoss fields and confidence. The factors array is carried by /analyse, not by this endpoint."
               },
               "plan": {
                 "type": "object",
@@ -522,7 +522,7 @@
                   "venueLabel": { "type": "string" },
                   "venueFallback": {
                     "type": ["string", "null"],
-                    "description": "Null normally. When the venue that was chosen could not build, this carries its error and `venue` is the one that was built instead (the Jupiter route, then jupiter_ultra) — so whatever the chosen venue would have provided was not applied."
+                    "description": "Null normally. When the venue that was chosen could not build, this carries its error and `venue` is the one that was built instead: the Jupiter route, then jupiter_ultra. A fallback only ever moves toward the Jupiter route; a direct venue is built only when it won the comparison. If the Jupiter route could not be priced and Ultra cannot be built, the call fails with optimize_unavailable (uncharged) rather than substituting an unprotected route. Whatever the chosen venue would have provided was not applied; read `mevProtection` and `reason` for the venue actually built."
                   },
                   "venueDecision": {
                     "type": "object",
@@ -549,7 +549,7 @@
                             "unspentInputUsd": { "type": "number", "description": "Input the venue did not spend, which stays in the wallet." },
                             "priorityFeeUsd": { "type": "number" },
                             "tipUsd": { "type": "number" },
-                            "expectedMevLossUsd": { "type": "number", "description": "Charged only to routes exposed to the public mempool." },
+                            "expectedMevLossUsd": { "type": "number", "description": "The modelled sandwich cost (sandwichExposure.estimatedLossUsd), charged only to routes exposed to the public mempool. An estimate, not a measurement." },
                             "netUsd": { "type": ["number", "null"] }
                           }
                         }
@@ -573,6 +573,20 @@
                     "description": "upstream = the venue provides MEV protection (Ultra). none = the route is exposed like any pool swap; a priority fee buys inclusion, not protection.",
                     "enum": ["upstream", "none"]
                   },
+                  "transaction": {
+                    "type": "object",
+                    "description": "Experimental. Read from the returned transaction's own bytes, so the venue and protection claims can be checked rather than trusted. A transaction whose programs contradict plan.venue, a bundle with no Jito tip, or a transaction whose venue cannot be verified from its programs is never returned: the call fails with optimize_unavailable and is not charged.",
+                    "properties": {
+                      "programs": { "type": "array", "items": { "type": "string" }, "description": "Top-level program ids invoked by the transaction." },
+                      "venueVerified": { "type": "boolean", "description": "Always true in a returned plan: a program belonging to plan.venue is present. A transaction whose venue cannot be verified is refused, never returned with false." },
+                      "jitoTip": {
+                        "type": ["object", "null"],
+                        "description": "A SystemProgram transfer to a Jito tip account inside the transaction, or null.",
+                        "properties": { "lamports": { "type": "integer" }, "account": { "type": "string" } }
+                      },
+                      "note": { "type": "string" }
+                    }
+                  },
                   "priorityFee": { "$ref": "#/components/schemas/PriorityFee" },
                   "jitoTipLamports": { "type": "integer" },
                   "slippageBps": { "type": ["integer", "null"] },
@@ -587,10 +601,11 @@
                       "priceImpactPct": { "type": ["number", "null"] },
                       "requestedInAmount": { "type": "string", "description": "raydium only. The amount you asked to swap." },
                       "solReserveLamports": { "type": "integer", "description": "raydium only. SOL held back from the input to cover fees and rent; it stays in the wallet." },
+                      "reserveNote": { "type": ["string", "null"], "description": "raydium only. Why solReserveLamports was held back, present whenever it is above 0. A wallet that holds less SOL than the requested amount is refused rather than built." },
                       "minimumOutAmount": { "type": "string", "description": "raydium only. The slippage floor encoded in the transaction." }
                     }
                   },
-                  "reason": { "type": "string" }
+                  "reason": { "type": "string", "description": "Experimental. Why this venue was built. On a route with no MEV protection (raydium, jupiter_swap) it also states the modelled sandwich cost and the worst case: the loss if the trade is sandwiched, bounded by the slippage floor in the transaction." }
                 }
               },
               "submit": {
@@ -615,7 +630,7 @@
                 "description": "Every cost itemised so the stated net can be checked rather than trusted.",
                 "properties": {
                   "currency": { "const": "USD" },
-                  "expectedMevLossUsd": { "type": ["number", "null"] },
+                  "expectedMevLossUsd": { "type": ["number", "null"], "description": "The modelled sandwich cost for this trade. An estimate, not a measurement." },
                   "priorityFee": {
                     "type": ["string", "number", "null"],
                     "description": "A string on jupiter_ultra, where the fee is venue-managed; its decoded amount is in plan.priorityFee. On other venues, the applied fee in USD, or null when no SOL price was available."
