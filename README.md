@@ -222,6 +222,8 @@ Both lanes fill in — request → `402` → USDC authorization signed → payme
 
 ## Contract
 
+The complete machine-readable contract is [`openapi.json`](openapi.json) (OpenAPI 3.1): every endpoint, request body, response shape, error code, and worked examples. It is the same file served at <https://zendiq.ai/openapi.json>. For the live prices, rate limits and field-stability tiers, `GET /v1/agent` on the API is authoritative. The summary below covers what most integrations need.
+
 `POST /v1/agent/analyse-token` — **free**, rate-limited (screen stage)
 
 ```json

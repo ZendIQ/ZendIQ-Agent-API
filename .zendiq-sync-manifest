@@ -9,6 +9,7 @@ demo\index.html
 demo\runner.js
 demo\server.js
 src\mcp-server.js
+openapi.json
 examples\agent.test.js
 examples\analyse.js
 examples\budget.js
