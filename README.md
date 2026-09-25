@@ -109,7 +109,7 @@ Output (`structuredContent`):
 
 The full risk breakdown (token-risk factors, sandwich exposure, provenance fingerprint) is returned unchanged alongside these committed fields, so the MCP result is byte-identical to the HTTP `/analyse` response. Each call costs `$0.01` in USDC, paid automatically via x402 using the configured keypair.
 
-**`zendiq_optimize_swap`** — **execute** stage. Build an executable swap once the decision to trade is already made. Paid. Returns an unsigned Jupiter transaction plus the `plan` and itemised `netBenefit` arithmetic behind it, so the bytes can be checked against the stated intent before signing. Zero custody — nothing is signed here.
+**`zendiq_optimize_swap`** — **execute** stage. Build an executable swap once the decision to trade is already made. Paid. Returns an unsigned swap transaction (a Jupiter route, or a direct venue when it beats Jupiter after costs) plus the `plan` and itemised `netBenefit` arithmetic behind it, so the bytes can be checked against the stated intent before signing. Zero custody — nothing is signed here.
 
 | Input | Type | Required | Description |
 |---|---|---|---|
@@ -172,7 +172,7 @@ The autonomous agent is advisory — it reports the recommended path and fees wi
 
 ## Execution — build a signable swap (`/optimize`)
 
-`/analyse` is advisory. `/optimize` goes one step further: it returns an **unsigned** swap transaction built through Jupiter, with the venue, priority fee and MEV posture chosen from the same risk model — plus the plan, an on-chain simulation, and the net-benefit arithmetic. You verify the bytes against the stated plan, then sign and submit with your own wallet. ZendIQ never holds a key.
+`/analyse` is advisory. `/optimize` goes one step further: it returns an **unsigned** swap transaction, with the venue, priority fee and MEV posture chosen from the same risk model and a net-benefit comparison across venues — plus the plan, an on-chain simulation, and the net-benefit arithmetic. You verify the bytes against the stated plan, then sign and submit with your own wallet. ZendIQ never holds a key.
 
 ```powershell
 npm run budget:init
@@ -256,11 +256,13 @@ Additional fields are experimental and may change within `v1`. Stable fields are
 
 `POST /v1/agent/optimize`
 
-Same request body as `/analyse` plus a `taker` public key. Returns an **unsigned** Jupiter swap `transaction`, the `plan` (venue, slippage, priority fee), a `simulation` result, and the `netBenefit` breakdown. Zero custody — you verify, sign, and submit. Priced per call in USDC.
+Same request body as `/analyse` plus a `taker` public key. Returns an **unsigned** swap `transaction`, the `plan` (venue, slippage, priority fee, and the `venueDecision` comparison behind the venue), a `simulation` result, and the `netBenefit` breakdown. Zero custody — you verify, sign, and submit. Priced per call in USDC.
 
 The venue is chosen by risk, so read `plan.venue` rather than assuming one. **Jupiter Ultra** is used for low-risk trades and for sandwich-driven risk, where its upstream MEV protection is the instrument that addresses the exposure; it sizes the priority fee itself. The **Jupiter Swap API** (Quote + Build) is used when risk scoring calls for a specific priority fee, which Ultra cannot honour — there `plan.priorityFee` reports the fee actually applied, read back out of the build, and the route carries no upstream MEV protection.
 
-**Submission differs by venue** — follow the returned `submit` object rather than hardcoding a path. On `jupiter_ultra`, sign `transaction` and POST `{ signedTransaction, requestId }` to `https://lite-api.jup.ag/ultra/v1/execute`; submitting through your own RPC instead forfeits Ultra's MEV protection and invalidates the `netBenefit` figures. On `jupiter_swap` there is no `requestId` (it is `null`) and no `/execute` step — sign and send to your own RPC, with the priority fee already inside the transaction.
+A direct venue (**Raydium**) is quoted alongside and replaces the Jupiter route only when it beats it after priority fee and expected sandwich loss by a margin (the larger of $0.005 and 0.1% of the trade). An unprotected direct venue is never eligible when sandwich exposure drives the verdict or Jupiter's fill is off-chain. `plan.venueDecision` shows every candidate's arithmetic; often the answer is Jupiter.
+
+**Submission differs by venue** — follow the returned `submit` object rather than hardcoding a path. On `jupiter_ultra`, sign `transaction` and POST `{ signedTransaction, requestId }` to `https://lite-api.jup.ag/ultra/v1/execute`; submitting through your own RPC instead forfeits Ultra's MEV protection and invalidates the `netBenefit` figures. On `jupiter_swap` and `raydium` there is no `requestId` (it is `null`) and no `/execute` step — sign and send to your own RPC, with the priority fee already inside the transaction. Send a `raydium` transaction promptly: Raydium embeds its own blockhash and `submit.lastValidBlockHeight` is `null`.
 
 `/optimize` does not return a verdict and does not refuse a trade: it builds a transaction even for a token that scores `CRITICAL`. Check `tokenRisk.level` before signing, or call `/analyse` first.
 

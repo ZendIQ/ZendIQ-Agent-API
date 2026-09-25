@@ -170,7 +170,8 @@ const TOOL_OPTIMIZE = {
   title: 'Build an optimized Solana swap',
   description:
     'Build an executable Solana swap once you have already decided to trade. Returns an '
-    + 'unsigned Jupiter Ultra transaction plus the structured plan and itemised net-benefit '
+    + 'unsigned swap transaction — a Jupiter route, or a direct venue when it beats Jupiter '
+    + 'after costs — plus the structured plan and itemised net-benefit '
     + 'arithmetic behind it, so you can verify the bytes against the stated intent before '
     + 'signing. Zero custody: the transaction is never signed here — you sign and submit it '
     + 'with your own wallet. A build that fails charges nothing. Each successful call costs '

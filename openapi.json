@@ -108,7 +108,7 @@
         "operationId": "optimizeSwap",
         "tags": ["triage"],
         "summary": "Unsigned optimised transaction ($0.02)",
-        "description": "Costs $0.02, paid over x402. Returns an unsigned Jupiter swap transaction, the structured `plan` it is supposed to contain, how to `submit` it, a simulation result, and an itemised `netBenefit` breakdown. The venue is chosen by risk — read `plan.venue` and follow `submit` rather than assuming one. Verify the decoded transaction against `plan` before signing — do not blind-sign. A failed build returns >= 400 and charges nothing.\n\nThis endpoint returns no verdict and does not refuse a trade: it builds a transaction even for a token that scores CRITICAL. Check `tokenRisk` before signing, or call /analyse first.\n\nThe route is built against mainnet liquidity, so `taker` must be a mainnet wallet holding the input token, even though the call fee settles in devnet USDC.",
+        "description": "Costs $0.02, paid over x402. Returns an unsigned swap transaction, the structured `plan` it is supposed to contain, how to `submit` it, a simulation result, and an itemised `netBenefit` breakdown. The venue is chosen by risk, then by net benefit: a Jupiter route, or a direct venue when it beats that route after costs (`plan.venueDecision` shows the comparison) — read `plan.venue` and follow `submit` rather than assuming one. Verify the decoded transaction against `plan` before signing — do not blind-sign. A failed build returns >= 400 and charges nothing.\n\nThis endpoint returns no verdict and does not refuse a trade: it builds a transaction even for a token that scores CRITICAL. Check `tokenRisk` before signing, or call /analyse first.\n\nThe route is built against mainnet liquidity, so `taker` must be a mainnet wallet holding the input token, even though the call fee settles in devnet USDC.",
         "requestBody": {
           "required": true,
           "content": {
@@ -516,13 +516,46 @@
                 "properties": {
                   "venue": {
                     "type": "string",
-                    "description": "jupiter_ultra or jupiter_swap under risk-based selection. Other venue names appear only when a venue was forced through the authenticated debug override, in which case `override` is non-null. Treat unrecognised values as unknown, not as an error.",
-                    "examples": ["jupiter_ultra", "jupiter_swap"]
+                    "description": "jupiter_ultra or jupiter_swap under risk-based selection, or raydium when its direct quote beats that Jupiter route after costs (see venueDecision). Other venue names appear only when a venue was forced through the authenticated debug override, in which case `override` is non-null. Treat unrecognised values as unknown, not as an error.",
+                    "examples": ["jupiter_ultra", "jupiter_swap", "raydium"]
                   },
                   "venueLabel": { "type": "string" },
                   "venueFallback": {
                     "type": ["string", "null"],
-                    "description": "Null normally. When the venue risk scoring chose could not build, this carries its error and `venue` is the fallback (jupiter_ultra) — so the fee control that venue would have provided was not applied."
+                    "description": "Null normally. When the venue that was chosen could not build, this carries its error and `venue` is the one that was built instead (the Jupiter route, then jupiter_ultra) — so whatever the chosen venue would have provided was not applied."
+                  },
+                  "venueDecision": {
+                    "type": "object",
+                    "description": "Experimental. The cross-venue comparison behind `venue`. netUsd = outUsd + unspentInputUsd − priorityFeeUsd − tipUsd − expectedMevLossUsd, per candidate. A direct venue wins only when it beats the Jupiter baseline by more than marginUsd; Jupiter wins ties and anything unpriced.",
+                    "properties": {
+                      "evaluated": { "type": "boolean" },
+                      "basis": { "type": "string", "enum": ["net_benefit", "unavailable_no_usd_rates", "unavailable_baseline_unpriced", "not_evaluated_venue_forced"] },
+                      "baseline": { "type": "string", "description": "The Jupiter venue risk scoring selected." },
+                      "chosen": { "type": "string", "description": "The ranking's winner. If it could not be built, `plan.venue` differs and `plan.venueFallback` says why." },
+                      "marginUsd": { "type": "number", "description": "The larger of $0.005 and 0.1% of the trade." },
+                      "advantageUsd": { "type": ["number", "null"], "description": "Winner's netUsd minus the baseline's; null when the baseline was kept." },
+                      "candidates": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "venue": { "type": "string" },
+                            "status": { "type": "string", "enum": ["quoted", "ineligible", "failed", "unknown"], "description": "unknown = the quote was slower than 2.5 s or a cost could not be priced; it does not compete." },
+                            "reason": { "type": ["string", "null"], "description": "Why the venue is ineligible." },
+                            "error": { "type": ["string", "null"] },
+                            "inAmount": { "type": "string" },
+                            "outAmount": { "type": "string" },
+                            "outUsd": { "type": "number" },
+                            "unspentInputUsd": { "type": "number", "description": "Input the venue did not spend, which stays in the wallet." },
+                            "priorityFeeUsd": { "type": "number" },
+                            "tipUsd": { "type": "number" },
+                            "expectedMevLossUsd": { "type": "number", "description": "Charged only to routes exposed to the public mempool." },
+                            "netUsd": { "type": ["number", "null"] }
+                          }
+                        }
+                      },
+                      "note": { "type": "string" }
+                    }
                   },
                   "override": {
                     "type": ["object", "null"],
@@ -549,9 +582,12 @@
                       "type": { "type": ["string", "null"] },
                       "swapType": { "type": ["string", "null"] },
                       "hops": { "type": ["integer", "null"] },
-                      "inAmount": { "type": ["string", "null"] },
+                      "inAmount": { "type": ["string", "null"], "description": "The amount actually quoted. On raydium with a SOL input this is below the requested amount by solReserveLamports." },
                       "outAmount": { "type": ["string", "null"] },
-                      "priceImpactPct": { "type": ["number", "null"] }
+                      "priceImpactPct": { "type": ["number", "null"] },
+                      "requestedInAmount": { "type": "string", "description": "raydium only. The amount you asked to swap." },
+                      "solReserveLamports": { "type": "integer", "description": "raydium only. SOL held back from the input to cover fees and rent; it stays in the wallet." },
+                      "minimumOutAmount": { "type": "string", "description": "raydium only. The slippage floor encoded in the transaction." }
                     }
                   },
                   "reason": { "type": "string" }
@@ -711,7 +747,7 @@
           "appliedUsd": { "type": ["number", "null"] },
           "microLamports": { "type": ["integer", "null"] },
           "computeUnitLimit": { "type": ["integer", "null"] },
-          "feePayer": { "type": ["string", "null"], "description": "Present on jupiter_ultra. The transaction's fee payer. When it is not your taker (a gasless fill), Jupiter pays the decoded fee, not your wallet." },
+          "feePayer": { "type": ["string", "null"], "description": "The transaction's fee payer, decoded from the bytes. When it is not your taker (a gasless jupiter_ultra fill), Jupiter pays the decoded fee, not your wallet." },
           "solPriceUsd": { "type": ["number", "null"] },
           "solPriceSource": { "type": ["string", "null"] },
           "note": { "type": "string" }
