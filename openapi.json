@@ -192,7 +192,7 @@
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
       "OptimizeUnavailable": {
-        "description": "No transaction is returned, and you were not charged. Error code `optimize_unavailable`; `causes` names what each venue returned. Raised when: no venue could build a transaction, including after falling back; the Jupiter route could not be priced and Ultra could not be built (an unprotected direct venue is never substituted for it); the built transaction's programs contradict its venue, or a bundle carries no Jito tip; or the built transaction's venue could not be verified from its bytes.",
+        "description": "No transaction is returned, and you were not charged. Error code `optimize_unavailable`; `causes` names what each venue returned. Raised when: no venue could build a transaction, including after falling back; the Jupiter route could not be priced and Ultra could not be built (an unprotected direct venue is never substituted for it); the built transaction's programs contradict its venue, or a bundle carries no Jito tip; or the built transaction's venue could not be verified from its bytes or, on jupiter_ultra, from its provenance.",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
       "AnalysisUnavailable": {
@@ -613,10 +613,11 @@
                   },
                   "transaction": {
                     "type": "object",
-                    "description": "Experimental. Read from the returned transaction's own bytes, so the venue and protection claims can be checked rather than trusted. A transaction whose programs contradict plan.venue, a bundle with no Jito tip, or a transaction whose venue cannot be verified from its programs is never returned: the call fails with optimize_unavailable and is not charged.",
+                    "description": "Experimental. Read from the returned transaction's own bytes, so the venue and protection claims can be checked rather than trusted. A transaction whose programs contradict plan.venue, a bundle with no Jito tip, or a transaction whose venue cannot be verified (from its programs, or on jupiter_ultra from its provenance) is never returned: the call fails with optimize_unavailable and is not charged.",
                     "properties": {
-                      "programs": { "type": "array", "items": { "type": "string" }, "description": "Top-level program ids invoked by the transaction." },
-                      "venueVerified": { "type": "boolean", "description": "Always true in a returned plan: a program belonging to plan.venue is present. A transaction whose venue cannot be verified is refused, never returned with false." },
+                      "programs": { "type": "array", "items": { "type": "string" }, "description": "Top-level program ids invoked by the transaction, including a third-party router's." },
+                      "venueVerified": { "type": "boolean", "description": "Always true in a returned plan. A transaction whose venue cannot be verified is refused, never returned with false." },
+                      "verifiedBy": { "type": "string", "enum": ["programs", "provenance"], "description": "How the venue was verified. programs: a program belonging to plan.venue is present. provenance: jupiter_ultra only, when Ultra filled through a third-party router (plan.route.router) whose programs are not published; the bytes are exactly the transaction Ultra returned for this requestId, the taker signs it, and Ultra /execute only lands that transaction. Provenance never excuses undecodable bytes or a bundle without a tip." },
                       "jitoTip": {
                         "type": ["object", "null"],
                         "description": "A SystemProgram transfer to a Jito tip account inside the transaction, or null.",
@@ -633,6 +634,7 @@
                     "properties": {
                       "type": { "type": ["string", "null"] },
                       "swapType": { "type": ["string", "null"] },
+                      "router": { "type": ["string", "null"], "description": "jupiter_ultra only. The router Ultra filled the order through, as Ultra names it (for example metis, jupiterz, okx)." },
                       "hops": { "type": ["integer", "null"] },
                       "inAmount": { "type": ["string", "null"], "description": "The amount actually quoted. On raydium with a SOL input this is below the requested amount by solReserveLamports." },
                       "outAmount": { "type": ["string", "null"] },
