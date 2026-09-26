@@ -69,15 +69,16 @@ const TOOL = {
     + 'estimates sandwich-attack exposure. Advisory only: no transaction is built, no keys '
     + 'are handled, and nothing is executed on your behalf. Each call costs $0.01 in USDC, '
     + 'paid automatically via x402. '
-    + 'NETWORK: payment settles in DEVNET USDC, so an agent funded only on mainnet cannot '
-    + 'pay for this call today — fund a devnet wallet first. The market data analysed is '
-    + 'mainnet, so the verdict itself is about real liquidity. '
+    + 'NETWORK: the API is in its testing phase, so payment settles in DEVNET USDC (free test '
+    + 'money); an agent funded only on mainnet cannot pay for this call yet. At launch payment '
+    + 'moves to mainnet USDC. The market data analysed is always mainnet, so the verdict is '
+    + 'about real liquidity. '
     + 'The full risk breakdown behind the verdict — token risk '
     + 'factors, sandwich exposure detail, and route economics — is available on the HTTP '
     + 'endpoint POST /v1/agent/analyse. The HTTP endpoint POST /v1/agent/optimize ($0.02) '
-    + 'additionally returns an unsigned transaction; note it routes against mainnet '
-    + 'liquidity via Jupiter Ultra, so its taker must be a mainnet wallet holding the input '
-    + 'token even though that call is also paid for in devnet USDC.',
+    + 'additionally returns an unsigned mainnet transaction, so its taker must be a mainnet '
+    + 'wallet holding the input amount and SOL for fees and rent, even though that call is '
+    + 'also paid for in devnet USDC.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -180,11 +181,15 @@ const TOOL_OPTIMIZE = {
     + 'execute it well. If the open question is still whether to trade at all, use '
     + 'zendiq_triage_swap instead: this tool returns token risk and sandwich exposure scores '
     + 'but NOT the Safe / Protect / Refuse verdict. '
-    + 'NETWORK: payment settles in DEVNET USDC, so an agent funded only on mainnet cannot pay '
-    + 'for this call today — fund a devnet wallet first. The swap itself is routed against '
-    + 'MAINNET liquidity, so `taker` must be a mainnet wallet that actually holds the input '
-    + 'token. Those are two different wallets today, and the returned transaction is only '
-    + 'submittable by the taker.',
+    + 'NETWORK: the API is in its testing phase, so payment settles in DEVNET USDC (free test '
+    + 'money) from the paying wallet; an agent funded only on mainnet cannot pay for this call '
+    + 'yet. At launch payment moves to mainnet USDC. The swap itself is always built against '
+    + 'MAINNET liquidity for `taker`, a mainnet wallet that must hold the input amount and SOL '
+    + 'for the network fee and token account rent (a gasless Jupiter Ultra fill is exempt from '
+    + 'the SOL). A taker that cannot fund the trade gets 422 taker_insufficient_balance, '
+    + 'uncharged, naming the token and the shortfall. During testing the paying wallet and the '
+    + 'taker are two different wallets, and the returned transaction is only submittable by '
+    + 'the taker.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -200,7 +205,9 @@ const TOOL_OPTIMIZE = {
         type: 'string',
         description:
           'Base58 public key the swap is built for. Must be a mainnet wallet holding the '
-          + 'input token — the returned transaction is only submittable by this account.',
+          + 'input amount and SOL for fees and rent (a gasless Ultra fill is exempt from the '
+          + 'SOL). Not the paying wallet. The returned transaction is only submittable by this '
+          + 'account.',
       },
       slippageBps: {
         type: 'integer',
