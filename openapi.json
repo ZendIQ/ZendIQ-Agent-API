@@ -2,9 +2,9 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ZendIQ Agent API",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "summary": "Execution-layer swap protection for Solana, priced per call over x402.",
-    "description": "Scores token risk and sandwich exposure for a proposed Solana swap and returns a Safe / Protect / Refuse verdict, or an unsigned optimised transaction.\n\nIMPORTANT — NETWORK: this API is live on Solana **devnet only**. Calls are paid for in devnet USDC over the x402 protocol, so an agent funded on mainnet cannot pay for a call. Do not wire this into a mainnet budget yet. Note that POST /v1/agent/optimize builds its route against mainnet liquidity via Jupiter (which has no devnet deployment), so `taker` must be a mainnet wallet holding the input token even though the call fee settles in devnet USDC.\n\nCUSTODY: none. ZendIQ never holds keys or funds. /analyse builds no transaction; /optimize returns an unsigned transaction you sign and submit yourself.\n\nAUTHORITATIVE SOURCE: GET /v1/agent returns a live, free, unauthenticated manifest of every endpoint, its price, the rate limits, and the field-stability contract. If this document and that manifest disagree, the manifest is correct.\n\nNot financial advice.",
+    "description": "Scores token risk and sandwich exposure for a proposed Solana swap and returns a Safe / Protect / Refuse verdict, or an unsigned optimised transaction.\n\nIMPORTANT — NETWORK: the API is in its testing phase, and exactly one thing runs on devnet: paying for the call. Payments settle in **devnet USDC** over x402, which is free test money, so you can integrate and run a full loop without spending real money. Everything the call does runs on **mainnet**, always: token scores, sandwich exposure and quotes are read from mainnet, and /optimize returns a real mainnet transaction, because devnet has no real tokens or liquidity and Jupiter has no devnet deployment. At launch, payment moves to mainnet USDC and nothing else changes; until then, an agent funded only on mainnet cannot pay for a call. The `network` field of GET /v1/agent states the current payment network, so read it there rather than hardcoding it. Note that POST /v1/agent/optimize builds its route against mainnet liquidity, so `taker` must be a mainnet wallet holding the input amount and SOL for fees and rent (a gasless Jupiter Ultra fill is exempt from the SOL), even though the call fee settles in devnet USDC. During testing two wallets are involved, one on each network: the paying wallet signs the x402 payment in devnet USDC and needs no SOL; the `taker` is the mainnet wallet that signs the trade. At launch one mainnet wallet can do both.\n\nCUSTODY: none. ZendIQ never holds keys or funds. /analyse builds no transaction; /optimize returns an unsigned transaction you sign and submit yourself.\n\nLATENCY: most of a call is token screening, shared by all callers and cached per mint for 60 s. A first scan of a token typically takes 5–9 s (measured 4.7–8.5 s on the live service, 25 Sep 2026) and is bounded at ~20 s by per-source timeouts; a mint scanned in the last 60 s returns in under 1 s; /optimize with a valid `analysisId` skips the scan and typically takes 1–2 s. Set your client timeout to at least 30 s. A scan always runs to completion and is never returned partially, because an agent cannot act on a partly scanned token. A source that does not answer within its own timeout is reported as an `unknown` signal inside a completed 200; treat unknown as unknown, never as safe.\n\nHANDSHAKE: /analyse-token and /analyse return an `analysisId`. Pass it to /optimize within 60 s to reuse that token scan; market state (quote, price impact, sandwich exposure, congestion) is always fetched fresh. A missing, expired or unknown ID means a full scan, never an error. An ID for a different mint is rejected with 400 `analysis_mint_mismatch`, uncharged.\n\nAUTHORITATIVE SOURCE: GET /v1/agent returns a live, free, unauthenticated manifest of every endpoint, its price, the rate limits, and the field-stability contract. If this document and that manifest disagree, the manifest is correct.\n\nNot financial advice.",
     "contact": { "name": "ZendIQ", "url": "https://zendiq.ai/agents/" },
     "license": { "name": "See repository", "url": "https://github.com/ZendIQ/ZendIQ-Agent-API" }
   },
@@ -15,7 +15,7 @@
   "servers": [
     {
       "url": "https://zendiq-backend.onrender.com",
-      "description": "Production. Payment settles on Solana devnet."
+      "description": "Production. Payments settle on Solana devnet during the testing phase; mainnet at launch."
     }
   ],
   "tags": [
@@ -47,7 +47,7 @@
         "operationId": "screenToken",
         "tags": ["screening"],
         "summary": "Screen a single token mint (free)",
-        "description": "Free and rate-limited; registered ahead of the payment gate so it is never charged. Returns a risk score for one SPL token mint together with the signals behind it. If the token cannot be screened, the call returns 502 `analysis_unavailable` rather than a score it could not compute — there is no degraded 200 on this endpoint. Rate-limited per IP on its own, higher limit than the paid endpoints.",
+        "description": "Free and rate-limited; registered ahead of the payment gate so it is never charged. Returns a risk score for one SPL token mint together with the signals behind it, and an `analysisId` that /optimize can reuse for 60 s. A first scan takes 5–9 s typically and up to ~20 s; set a client timeout of at least 30 s. A source that does not answer in time is an `unknown` signal inside the 200, not a failure. If the token cannot be screened at all, the call returns 502 `analysis_unavailable` rather than a score it could not compute — there is no degraded 200 on this endpoint. Rate-limited per IP on its own, higher limit than the paid endpoints.",
         "requestBody": {
           "required": true,
           "content": {
@@ -76,7 +76,7 @@
         "operationId": "analyseSwap",
         "tags": ["triage"],
         "summary": "Verdict for a proposed swap ($0.01)",
-        "description": "Costs $0.01, paid over x402. Returns a Safe / Protect / Refuse verdict with token risk, sandwich exposure, and a recommended execution path. Builds no transaction. Always settles on success, because the verdict itself is the deliverable — a Refuse verdict is a useful answer, not a failure.",
+        "description": "Costs $0.01, paid over x402. Returns a Safe / Protect / Refuse verdict with token risk, sandwich exposure, and a recommended execution path. Builds no transaction. Always settles on success, because the verdict itself is the deliverable — a Refuse verdict is a useful answer, not a failure. Returns an `analysisId` for the token scan of `outputMint`, reusable by /optimize for 60 s. A first scan of a token can take up to ~20 s; set a client timeout of at least 30 s.",
         "requestBody": {
           "required": true,
           "content": {
@@ -108,7 +108,7 @@
         "operationId": "optimizeSwap",
         "tags": ["triage"],
         "summary": "Unsigned optimised transaction ($0.02)",
-        "description": "Costs $0.02, paid over x402. Returns an unsigned swap transaction, the structured `plan` it is supposed to contain, how to `submit` it, a simulation result, and an itemised `netBenefit` breakdown. The venue is chosen by risk, then by net benefit: a Jupiter route, or a direct venue when it beats that route after costs (`plan.venueDecision` shows the comparison) — read `plan.venue` and follow `submit` rather than assuming one. Verify the decoded transaction against `plan` before signing — do not blind-sign. A failed build returns >= 400 and charges nothing.\n\nThis endpoint returns no verdict and does not refuse a trade: it builds a transaction even for a token that scores CRITICAL. Check `tokenRisk` before signing, or call /analyse first.\n\nThe route is built against mainnet liquidity, so `taker` must be a mainnet wallet holding the input token, even though the call fee settles in devnet USDC.",
+        "description": "Costs $0.02, paid over x402. Returns an unsigned swap transaction, the structured `plan` it is supposed to contain, how to `submit` it, a simulation result, and an itemised `netBenefit` breakdown. The venue is chosen by risk, then by net benefit: a Jupiter route, or a direct venue when it beats that route after costs (`plan.venueDecision` shows the comparison) — read `plan.venue` and follow `submit` rather than assuming one. Verify the decoded transaction against `plan` before signing — do not blind-sign. A failed build returns >= 400 and charges nothing.\n\nThis endpoint returns no verdict and does not refuse a trade: it builds a transaction even for a token that scores CRITICAL. Check `tokenRisk` before signing, or call /analyse first.\n\nPass `analysisId` from /analyse-token or /analyse (for this `outputMint`, within 60 s) to skip the token scan; the call then typically takes 1–2 s. `analysis` states whether the scan was reused, served from the shared 60 s cache, or run fresh, and why. A missing, expired or unknown ID means a full scan, never an error; an ID for another mint is 400 `analysis_mint_mismatch`, uncharged. Without a usable ID a first scan can take up to ~20 s; set a client timeout of at least 30 s.\n\nThe route is built against mainnet liquidity, so `taker` is a mainnet wallet, and not the wallet that pays for the call (that one holds devnet USDC and needs no SOL). The `taker` must hold the input amount and mainnet SOL for the network fee, any priority fee, and rent for token accounts the swap opens; on a SOL input the SOL being swapped comes on top. A gasless Jupiter Ultra fill, where `plan.priorityFee.feePayer` is not the `taker`, is exempt from the SOL. A `taker` that cannot fund the trade gets 422 `taker_insufficient_balance`, uncharged, naming the token and the shortfall.\n\nBuild-only trial: `taker` is only a public key and nothing is signed here, so any funded mainnet address can be passed to see the full `plan`, `simulation` and `plan.venueDecision`. A transaction built for a wallet you do not control cannot be signed or submitted; to land a trade, pass your own wallet.",
         "requestBody": {
           "required": true,
           "content": {
@@ -126,9 +126,10 @@
               "application/json": { "schema": { "$ref": "#/components/schemas/OptimizeResponse" } }
             }
           },
-          "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "400": { "$ref": "#/components/responses/OptimizeBadRequest" },
           "402": { "$ref": "#/components/responses/PaymentRequired" },
           "409": { "$ref": "#/components/responses/AuthorizationAlreadyUsed" },
+          "422": { "$ref": "#/components/responses/TakerInsufficientBalance" },
           "429": { "$ref": "#/components/responses/RateLimited" },
           "500": { "$ref": "#/components/responses/InternalError" },
           "502": { "$ref": "#/components/responses/OptimizeUnavailable" }
@@ -160,6 +161,10 @@
         "description": "A field failed validation. The message names the field. You were not charged.",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
+      "OptimizeBadRequest": {
+        "description": "You were not charged. Either `invalid_request` (a field failed validation; the message names it) or `analysis_mint_mismatch`: `analysisId` was issued for a different mint than this request's `outputMint`. A mismatch is rejected rather than scanned past, because pairing one token's analysis with another token's trade is a caller bug that a silent rescan would hide. The body names both mints; screen the right mint, or omit `analysisId`. A missing, expired or unknown `analysisId` is never a 400 — it means a full scan.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
       "PaymentRequired": {
         "description": "Payment required. Sign an authorization for exactly the amount in the PAYMENT-REQUIRED header and retry the identical request with a PAYMENT-SIGNATURE header (X-PAYMENT is accepted as an alias; a bare PAYMENT header is not read). This is the normal first response to a paid endpoint, not an error.",
         "headers": { "PAYMENT-REQUIRED": { "$ref": "#/components/headers/PaymentRequired" } }
@@ -182,12 +187,16 @@
         "description": "Unexpected server error. You were not charged.",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
+      "TakerInsufficientBalance": {
+        "description": "Error code `taker_insufficient_balance`. No transaction is returned, and you were not charged. The `taker` cannot fund the trade: `need` is `input_token` when it does not hold the input amount (checked before anything is quoted or built), or `sol_for_fees` when it cannot pay for the transaction it would sign (base fee, priority fee and Jito tip in the bytes, plus rent for token accounts the swap opens). A transaction whose fee payer is not the taker (a gasless Ultra fill) is exempt, and another venue that can fill gaslessly is tried before refusing. The body names the token, the amount required and held, and the shortfall. Balances are read from the taker's associated token accounts. SOL requirements are lower bounds, and when the balances cannot be read the check is skipped and the build proceeds.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
       "OptimizeUnavailable": {
         "description": "No transaction is returned, and you were not charged. Error code `optimize_unavailable`; `causes` names what each venue returned. Raised when: no venue could build a transaction, including after falling back; the Jupiter route could not be priced and Ultra could not be built (an unprotected direct venue is never substituted for it); the built transaction's programs contradict its venue, or a bundle carries no Jito tip; or the built transaction's venue could not be verified from its bytes.",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
       "AnalysisUnavailable": {
-        "description": "An upstream data source failed and no honest verdict could be produced. ZendIQ returns this rather than guessing, because a safety check that fails open is worse than no check. You were not charged.",
+        "description": "An upstream data source failed and no honest verdict could be produced. ZendIQ returns this rather than guessing, because a safety check that fails open is worse than no check. A slow source does not cause this: a source that runs out its timeout is an `unknown` signal inside a completed 200. You were not charged.",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       }
     },
@@ -228,7 +237,7 @@
             }
           },
           "evidence_fingerprint": { "type": "string", "description": "16-character SHA-256 prefix over the evidence used." },
-          "signals_resolved": { "type": "string", "description": "How many of the 16 signals actually resolved, e.g. \"14/16\". A low count means low confidence.", "examples": ["14/16"] },
+          "signals_resolved": { "type": "string", "description": "Coverage: resolved signals over the total, e.g. \"11/16\" means five came back unknown. An unknown never lowers the score; most add a `…: unavailable` factor with +5 caution points. Treat unknown as unknown, never as safe: a LOW score with low coverage means few checks were answered, not that the token is low-risk.", "examples": ["14/16"] },
           "signals": {
             "type": "array",
             "description": "Always all 16 signals, in a fixed order, whether or not each one resolved. A signal that could not be read is present with status \"unknown\" and a reason, never omitted and never silently downgraded to a pass. The example below is illustrative and shows one of every status; it is not a live reading of any particular token.",
@@ -286,7 +295,7 @@
           },
           "reason": {
             "type": "string",
-            "description": "Present only when status is \"unknown\", naming which source did not answer. insufficient_history is a fact about the token; every other value is a fact about our data sources on this call, so the same mint can resolve differently on a later call.",
+            "description": "Present only when status is \"unknown\", naming which source did not answer, either because it failed or because it ran its full timeout. insufficient_history is a fact about the token; every other value is a fact about our data sources on this call, so the same mint can resolve differently on a later call.",
             "enum": [
               "onchain_unavailable", "holder_distribution_unavailable", "rugcheck_unavailable",
               "launch_platform_unavailable", "lp_lock_unavailable", "price_history_fetch_failed",
@@ -298,7 +307,7 @@
         "required": ["id", "type", "value", "unit", "status"]
       },
       "TokenRisk": {
-        "description": "Degrades to an explicit available:false object when screening did not complete (/analyse and /optimize only — /analyse-token returns 502 instead). It never returns a safe-looking score it could not compute. On the unavailable variant, fees and overall risk were sized as if the token scored assumedLevel, and on /analyse the verdict fails closed to Protect with confidence \"low\" and a token_screening entry in `degraded` — a Protect reached this way means the token was not checked, not that it was found risky.",
+        "description": "Degrades to an explicit available:false object when screening did not complete because of an unexpected upstream failure (/analyse and /optimize only — /analyse-token returns 502 instead). A slow source never causes this; it is reported as an unknown signal inside a completed scan. It never returns a safe-looking score it could not compute. On the unavailable variant, fees and overall risk were sized as if the token scored assumedLevel, and on /analyse the verdict fails closed to Protect with confidence \"low\" and a token_screening entry in `degraded` — a Protect reached this way means the token was not checked, not that it was found risky.",
         "oneOf": [
           {
             "type": "object",
@@ -329,7 +338,7 @@
             "properties": {
               "mint": { "$ref": "#/components/schemas/Base58Pubkey" },
               "available": { "const": false },
-              "error": { "type": "string", "examples": ["timeout"] },
+              "error": { "type": "string", "examples": ["scan_failed"] },
               "assumedScore": { "type": "number", "examples": [50] },
               "assumedLevel": { "$ref": "#/components/schemas/RiskLevel" },
               "note": { "type": "string" }
@@ -387,6 +396,8 @@
             "properties": {
               "stage": { "const": "screen" },
               "mint": { "$ref": "#/components/schemas/Base58Pubkey" },
+              "analysisId": { "$ref": "#/components/schemas/AnalysisId" },
+              "analysisExpiresAt": { "$ref": "#/components/schemas/AnalysisExpiresAt" },
               "tokenRisk": { "$ref": "#/components/schemas/TokenRisk" },
               "cache": {
                 "type": "object",
@@ -430,7 +441,12 @@
             "properties": {
               "taker": {
                 "allOf": [{ "$ref": "#/components/schemas/Base58Pubkey" }],
-                "description": "The wallet that will sign and submit. Must be a mainnet wallet holding the input token."
+                "description": "The mainnet wallet that will sign and submit. Not the wallet that pays for the call. Must hold the input amount and SOL for the network fee, priority fee and token account rent, except on a gasless Jupiter Ultra fill; otherwise the call returns 422 `taker_insufficient_balance`, uncharged. Only the public key is needed: any funded mainnet address can be passed to see a build-only plan and simulation."
+              },
+              "analysisId": {
+                "type": "string",
+                "maxLength": 128,
+                "description": "Optional. The `analysisId` from /analyse-token or /analyse for this `outputMint`, within 60 s of issue. Reuses that token scan (authorities, holders, RugCheck, launch platform, age, creator history, bundled-launch check); the quote, price impact, sandwich exposure and congestion are always fetched fresh. A missing, expired or unknown ID means a full scan, never an error. An ID for a different mint is rejected with 400 `analysis_mint_mismatch`, uncharged."
               }
             }
           }
@@ -443,6 +459,8 @@
             "type": "object",
             "properties": {
               "verdict": { "$ref": "#/components/schemas/Verdict" },
+              "analysisId": { "$ref": "#/components/schemas/AnalysisId" },
+              "analysisExpiresAt": { "$ref": "#/components/schemas/AnalysisExpiresAt" },
               "confidence": { "type": ["string", "null"], "description": "Experimental field." },
               "reasons": { "type": "array", "items": { "type": "string" } },
               "recommendedExecution": {
@@ -500,6 +518,26 @@
           {
             "type": "object",
             "properties": {
+              "analysis": {
+                "type": "object",
+                "description": "Experimental. Where this response's token analysis came from, so reuse is stated rather than assumed.",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": ["reused", "cached", "full_scan"],
+                    "description": "reused = your analysisId was valid and its scan was reused. cached = no usable ID, but a completed scan of this mint from the last 60 s (by any caller) was used. full_scan = a new scan was run for this call."
+                  },
+                  "reason": {
+                    "type": ["string", "null"],
+                    "enum": [null, "no_analysis_id", "analysis_id_expired", "analysis_id_unknown"],
+                    "description": "Why the analysisId was not used; null when it was. analysis_id_unknown includes IDs issued before a server restart."
+                  },
+                  "analysisId": { "type": ["string", "null"], "description": "The ID of the scan actually used, reusable until expiresAt. Null if the scan did not complete." },
+                  "expiresAt": { "type": ["string", "null"], "format": "date-time" },
+                  "observedAt": { "type": ["string", "null"], "format": "date-time", "description": "When the token scan completed." },
+                  "ageSeconds": { "type": ["integer", "null"], "description": "Age of the token scan at response time; at most 60 when reused or cached." }
+                }
+              },
               "overallRisk": { "$ref": "#/components/schemas/RiskBlock" },
               "executionRisk": { "$ref": "#/components/schemas/RiskBlock" },
               "tokenRisk": {
@@ -719,10 +757,39 @@
       "Error": {
         "type": "object",
         "properties": {
-          "error": { "type": "string", "examples": ["invalid_request", "analysis_unavailable", "optimize_unavailable", "internal_error"] },
+          "error": { "type": "string", "examples": ["invalid_request", "analysis_mint_mismatch", "taker_insufficient_balance", "analysis_unavailable", "optimize_unavailable", "internal_error"] },
           "message": { "type": "string" },
-          "causes": { "type": "array", "items": { "type": "string" }, "description": "Present on 502. The underlying failure of each source or venue." }
+          "causes": { "type": "array", "items": { "type": "string" }, "description": "Present on 502 and on taker_insufficient_balance. The underlying failure of each source or venue." },
+          "analysisMint": { "type": "string", "description": "Present on analysis_mint_mismatch: the mint the analysisId was issued for." },
+          "outputMint": { "type": "string", "description": "Present on analysis_mint_mismatch: this request's outputMint." },
+          "need": { "type": "string", "enum": ["input_token", "sol_for_fees"], "description": "Present on taker_insufficient_balance: what the taker is short of." },
+          "taker": { "type": "string", "description": "Present on taker_insufficient_balance." },
+          "token": {
+            "type": "object",
+            "description": "Present on taker_insufficient_balance: the token the taker is short of. SOL on `sol_for_fees`.",
+            "properties": {
+              "mint": { "type": "string" },
+              "symbol": { "type": ["string", "null"] },
+              "decimals": { "type": ["integer", "null"] }
+            }
+          },
+          "required": { "type": ["string", "null"], "description": "Present on taker_insufficient_balance: amount needed, in whole tokens as a decimal string. Null when the mint's decimals could not be read; use requiredAtomic." },
+          "held": { "type": ["string", "null"], "description": "Present on taker_insufficient_balance: amount the taker holds, in whole tokens." },
+          "shortfall": { "type": ["string", "null"], "description": "Present on taker_insufficient_balance: required minus held, in whole tokens." },
+          "requiredAtomic": { "type": "string", "description": "Present on taker_insufficient_balance: required, in atomic units." },
+          "heldAtomic": { "type": "string", "description": "Present on taker_insufficient_balance: held, in atomic units." },
+          "shortfallAtomic": { "type": "string", "description": "Present on taker_insufficient_balance: shortfall, in atomic units." }
         }
+      },
+      "AnalysisId": {
+        "type": ["string", "null"],
+        "description": "Experimental. Identifies this token scan for reuse by /optimize until analysisExpiresAt (60 s from the scan, shared with the scan cache). Null when the scan did not complete. Held in server memory: a restart makes it unknown, which costs a full scan, not an error.",
+        "examples": ["an_Q2hsZ3v0mK7pX1aRt9Yc"]
+      },
+      "AnalysisExpiresAt": {
+        "type": ["string", "null"],
+        "format": "date-time",
+        "description": "Experimental. When analysisId stops being reusable. A scan served from the cache keeps its original expiry."
       },
       "RateLimitError": {
         "type": "object",

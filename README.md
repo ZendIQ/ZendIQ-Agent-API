@@ -53,6 +53,14 @@ npm run mcp
 
 The MCP server uses newline-delimited JSON-RPC over stdio. Diagnostics go to stderr so stdout remains a valid MCP transport.
 
+**5. Optional: try `/optimize` build-only.** `/optimize` builds a mainnet swap for a `taker`, which is not the devnet key above: that key only pays for the call. The `taker` is only a public key and nothing is signed, so any funded mainnet address shows the full plan, simulation and venue decision. For the default 0.003 SOL swap, pick one holding a little more than 0.003 SOL:
+
+```powershell
+npm run optimize -- --taker <ANY_FUNDED_MAINNET_ADDRESS>
+```
+
+This is **build-only**: it pays $0.02 in devnet USDC and signs nothing, and you cannot sign a transaction built for a wallet you do not control. A `taker` that cannot fund the trade gets `422 taker_insufficient_balance`, uncharged. To land a trade, see [Execution](#execution--build-a-signable-swap-optimize).
+
 Set variables in your shell. Nothing in this repository loads a `.env` file; `.env.example` only lists the variables for reference.
 
 The first call after the hosted API has been idle can take 30 seconds or more while it wakes; later calls are fast. A slow first call is not a failure.
@@ -78,7 +86,7 @@ That default is deliberate — it makes the quickstart work without infrastructu
 
 The endpoint can be overridden — `ZENDIQ_AGENT_URL` for the MCP server, `ZENDIQ_API_URL` for the examples and the demo runner — but it must point at a ZendIQ Agent API. These are two separate variables reading two separate code paths; setting one does not affect the other. The demo runner is the exception: it passes its `ZENDIQ_API_URL` to the MCP server it spawns, so there `ZENDIQ_AGENT_URL` is ignored.
 
-**Payment rail:** `ZENDIQ_AGENT_NETWORK` (MCP) and `AGENT_NETWORK` (examples) both default to `devnet`, and the hosted API settles in **devnet USDC** today. A wallet funded only on mainnet cannot pay for a call, even though the market data being analysed is mainnet. Fund a devnet wallet first.
+**Payment rail:** `ZENDIQ_AGENT_NETWORK` (MCP) and `AGENT_NETWORK` (examples) both default to `devnet`, and the hosted API settles in **devnet USDC** while it is in its testing phase: free test money, so you can run it end to end without spending real money. Only payment is on devnet. The analysis reads mainnet, and `/optimize` returns a real mainnet transaction, because devnet has no real tokens or liquidity to analyse or trade. At launch, payment moves to mainnet USDC and nothing else changes. Until then, a wallet funded only on mainnet cannot pay for a call. Fund a devnet wallet first.
 
 No ZendIQ credentials ship in this repository. `ZENDIQ_AGENT_KEYPAIR` is your key, signs your payments, and never leaves your machine.
 
@@ -116,7 +124,7 @@ The full risk breakdown (token-risk factors, sandwich exposure, provenance finge
 | `inputMint` | string | yes | Base58 mint being sold |
 | `outputMint` | string | yes | Base58 mint being bought |
 | `amount` | string | yes | Amount to sell, in the input mint's atomic units |
-| `taker` | string | yes | Base58 wallet the swap is built for; must hold the input token |
+| `taker` | string | yes | Base58 mainnet wallet the swap is built for; must hold the input amount and SOL for fees and rent (a gasless Jupiter Ultra fill is exempt from the SOL) |
 | `slippageBps` | integer | no | Slippage tolerance in basis points; omit for the route default |
 
 This tool returns token risk and sandwich exposure, but **not** the `verdict` — it assumes the decision has been taken. Call `zendiq_triage_swap` if you still need the verdict. Each call costs `$0.02` in USDC; a build that fails charges nothing.
@@ -184,7 +192,7 @@ $env:ZENDIQ_TAKER_KEYPAIR = 'C:\path\to\mainnet-keypair.json'
 npm run optimize -- --taker <YOUR_MAINNET_PUBKEY> --execute
 ```
 
-The swap routes on **mainnet** (Jupiter has no devnet), so `--taker` must be a wallet that holds the input token; the x402 payment stays on devnet USDC. By default the example **stops at simulation and spends nothing on-chain** — pass `--execute` (with `ZENDIQ_TAKER_KEYPAIR`) to sign and land a real swap. On `jupiter_ultra` the example submits through Jupiter's `/execute`; on `jupiter_swap` it sends through `SOLANA_RPC_URL`, which defaults to the public mainnet RPC. The response carries the unsigned `transaction`, the `plan`, the `submit` instructions for the chosen venue, the `simulation` result, and the `netBenefit` breakdown — everything needed to confirm the transaction matches the stated intent before signing.
+The swap routes on **mainnet** (Jupiter has no devnet), so `--taker` must be a wallet that holds the input amount and SOL for fees and rent; the x402 payment stays on devnet USDC. By default the example **stops at simulation and spends nothing on-chain** — pass `--execute` (with `ZENDIQ_TAKER_KEYPAIR`) to sign and land a real swap. On `jupiter_ultra` the example submits through Jupiter's `/execute`; on `jupiter_swap` it sends through `SOLANA_RPC_URL`, which defaults to the public mainnet RPC. The response carries the unsigned `transaction`, the `plan`, the `submit` instructions for the chosen venue, the `simulation` result, and the `netBenefit` breakdown — everything needed to confirm the transaction matches the stated intent before signing.
 
 ## Demo visualizer
 
