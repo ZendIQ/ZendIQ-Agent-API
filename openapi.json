@@ -691,7 +691,7 @@
                     "type": ["object", "null"],
                     "description": "Present on bundle venues. The tip is the last instruction of the swap transaction: a SystemProgram transfer from the fee payer to tipAccount.",
                     "properties": {
-                      "tipLamports": { "type": "integer", "description": "At least 1,000,000." },
+                      "tipLamports": { "type": "integer", "description": "At least 10,000. Above that, sized by the risk model up to 500,000; tipSource says which." },
                       "tipUsd": { "type": ["number", "null"] },
                       "tipAccount": { "type": "string" },
                       "tipSource": { "type": ["string", "null"], "enum": ["zendiq_risk_model", "bundle_tip_floor", null] },
