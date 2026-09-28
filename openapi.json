@@ -672,12 +672,12 @@
                   },
                   "override": {
                     "type": ["object", "null"],
-                    "description": "Null unless the venue was forced: by method: jito (enabledBy request) or for testing (enabledBy AGENT_DEBUG_KEY). When present, this plan does not reflect risk-based routing.",
+                    "description": "Null unless the caller forced a Jito bundle with method: jito. When present, this plan does not reflect risk-based routing.",
                     "properties": {
-                      "forcedVenue": { "type": ["string", "null"] },
+                      "forcedVenue": { "type": "null" },
                       "method": { "type": ["string", "null"], "examples": ["jito"] },
                       "riskVenue": { "type": "string" },
-                      "enabledBy": { "type": "string", "enum": ["request", "AGENT_DEBUG_KEY"] },
+                      "enabledBy": { "type": "string", "enum": ["request"] },
                       "warning": { "type": "string" }
                     }
                   },

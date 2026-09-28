@@ -72,13 +72,13 @@ async function retryTransient(fn, attempts = 3) {
 
 class ZendIQClient {
   /**
-   * @param {object} opts - `signer`, `budget`, `baseUrl`, `network`, `rpcUrl`.
+   * @param {object} opts - `signer`, `budget`, `baseUrl`, `network`, `rpcUrl`, optional `headers`.
    */
   constructor(opts) {
     this.baseUrl = (opts.baseUrl ?? 'https://zendiq-backend.onrender.com').replace(/\/$/, '');
     this.budget = opts.budget;
     this.network = opts.network ?? 'devnet';
-    this.debugKey = opts.debugKey ?? null;
+    this.headers = { ...(opts.headers ?? {}) };
     this.onEvent = typeof opts.onEvent === 'function' ? opts.onEvent : () => {};
     this.caip2 = this.network === 'mainnet' ? SOLANA_MAINNET_CAIP2 : SOLANA_DEVNET_CAIP2;
 
@@ -253,7 +253,7 @@ class ZendIQClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(this.debugKey ? { 'X-ZendIQ-Debug-Key': this.debugKey } : {}),
+        ...this.headers,
         ...headers,
       },
       body: JSON.stringify(swap),
