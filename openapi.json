@@ -227,7 +227,7 @@
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
       "PaymentRequired": {
-        "description": "Payment required. Sign an authorization for exactly the amount in the PAYMENT-REQUIRED header and retry the identical request with a PAYMENT-SIGNATURE header (X-PAYMENT is accepted as an alias; a bare PAYMENT header is not read). This is the normal first response to a paid endpoint, not an error. A 402 in reply to a paid attempt instead carries a PAYMENT-RESPONSE header: its `errorReason` `settlement_failed_on_chain` or `settlement_not_landed` means the transfer did not move and you were not charged; `settlement_pending` means it could not be confirmed within 90 s and may have landed, so look up its `transaction` on chain before paying again.",
+        "description": "Payment required. Sign an authorization for exactly the amount in the PAYMENT-REQUIRED header and retry the identical request with a PAYMENT-SIGNATURE header (X-PAYMENT is accepted as an alias; a bare PAYMENT header is not read). This is the normal first response to a paid endpoint, not an error. A 402 in reply to a paid attempt instead carries a PAYMENT-RESPONSE header: its `errorReason` `settlement_failed_on_chain` or `settlement_not_landed` means the transfer did not move and you were not charged; `settlement_pending` means it could not be confirmed within 90 s and may have landed: keep the PAYMENT-SIGNATURE header and retry once with the same header after about 5 s. If the transfer landed, that retry is redeemed for one fresh response on the same route within 24 h, and its PAYMENT-RESPONSE carries `redeemed: true`. Do not sign a new authorization.",
         "headers": {
           "PAYMENT-REQUIRED": { "$ref": "#/components/headers/PaymentRequired" },
           "PAYMENT-RESPONSE": { "$ref": "#/components/headers/PaymentResponse" }
@@ -244,7 +244,7 @@
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RateLimitError" } } }
       },
       "AuthorizationAlreadyUsed": {
-        "description": "This payment authorization was already presented and has not settled into a result that can be replayed. Read `priorOutcome`: `in_flight` means retry shortly with the same authorization; any other value means request a fresh 402 challenge — except `settle_threw` and `settle_unknown`, where the transfer may have landed and paying again could double-charge; check it on chain first. A replay of an authorization that did settle is not a 409: it returns the original 200 body with `replayed: true`.",
+        "description": "This payment authorization was already presented and has not settled into a result that can be replayed. Read `priorOutcome`: `in_flight` means retry shortly with the same authorization; any other value means request a fresh 402 challenge — except `settle_threw` and `settle_unknown`, where the transfer may have landed and paying again could double-charge; check it on chain first. A replay of an authorization that did settle is not a 409: it returns the original 200 body with `replayed: true`. A retry of a `settlement_pending` payment is answered by redemption instead: `already_served` (redeemed once already), `redemption_in_progress`, `redemption_route_mismatch` (only the route it paid for), `redemption_amount_mismatch`, `redemption_expired` (after 24 h; email support@zendiq.ai with the `settlement` signature for a refund) or `settlement_unresolved` (not yet known; do not pay again). Those carry `charged` and `settlement`.",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthorizationError" } } }
       },
       "InternalError": {
@@ -974,10 +974,12 @@
       "AuthorizationError": {
         "type": "object",
         "properties": {
-          "error": { "const": "authorization_already_used" },
+          "error": { "enum": ["authorization_already_used", "already_served", "redemption_in_progress", "redemption_route_mismatch", "redemption_amount_mismatch", "redemption_expired", "settlement_unresolved"] },
           "message": { "type": "string" },
-          "priorOutcome": { "type": "string", "examples": ["in_flight", "settle_threw"] },
-          "priorRoute": { "type": "string" }
+          "priorOutcome": { "type": "string", "examples": ["in_flight", "settle_threw", "charged_unserved"] },
+          "priorRoute": { "type": "string" },
+          "charged": { "type": ["boolean", "null"], "description": "On a settlement_pending retry: whether that payment was charged. Null means not yet known." },
+          "settlement": { "type": "string", "description": "On a settlement_pending retry: the payment's settlement transaction signature." }
         }
       },
       "Replayed": {

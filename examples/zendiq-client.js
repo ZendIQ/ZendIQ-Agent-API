@@ -72,13 +72,15 @@ async function retryTransient(fn, attempts = 3) {
 
 class ZendIQClient {
   /**
-   * @param {object} opts - `signer`, `budget`, `baseUrl`, `network`, `rpcUrl`, optional `headers`.
+   * @param {object} opts - `signer`, `budget`, `baseUrl`, `network`, `rpcUrl`, optional `headers`,
+   *   `pendingRetryMs` (wait before the one retry after settlement_pending, default 5000).
    */
   constructor(opts) {
     this.baseUrl = (opts.baseUrl ?? 'https://zendiq-backend.onrender.com').replace(/\/$/, '');
     this.budget = opts.budget;
     this.network = opts.network ?? 'devnet';
     this.headers = { ...(opts.headers ?? {}) };
+    this.pendingRetryMs = opts.pendingRetryMs ?? 5000;
     this.onEvent = typeof opts.onEvent === 'function' ? opts.onEvent : () => {};
     this.caip2 = this.network === 'mainnet' ? SOLANA_MAINNET_CAIP2 : SOLANA_DEVNET_CAIP2;
 
@@ -158,8 +160,10 @@ class ZendIQClient {
     }
 
     let response;
+    let pending = null;
     try {
-      response = await send(this.http.encodePaymentSignatureHeader(payload));
+      const header = this.http.encodePaymentSignatureHeader(payload);
+      ({ response, pending } = await retryPendingOnce(await send(header), () => send(header), this.pendingRetryMs));
     } catch (err) {
       // In flight, outcome unknown. Charge ourselves rather than under-count.
       this.budget.settle(reservation, { note: `network_error: ${err.message.slice(0, 80)}` });
@@ -205,12 +209,17 @@ class ZendIQClient {
       this.budget.release(reservation, 'served_from_cache_no_second_payment');
     } else if (response.ok) {
       this.budget.settle(reservation, { note: settlement?.transaction || 'settled' });
-    } else if (settleError === 'transaction_failed') {
+    } else if (pending) {
+      // The retry's 409 says whether the first presentation was charged; only a definite no releases it.
+      if (body?.charged === false) this.budget.release(reservation, 'pending_retry_not_charged');
+      else this.budget.settle(reservation, { note: `unconfirmed_settlement_may_have_landed: ${pending.transaction || 'no signature'}` });
+    } else if (settleError === 'transaction_failed' || settleError === 'settlement_pending') {
       // Ambiguous, not a refusal: this reason also covers a settlement that was submitted
       // and could not be confirmed. Measured on mainnet 7 Sep 2026 against a transfer that
-      // landed. Charging ourselves matches the network_error case above — under-counting a
-      // real payment is the worse error, because the ceiling stops protecting anything.
-      this.budget.settle(reservation, { note: 'unconfirmed_settlement_may_have_landed' });
+      // landed, and on devnet 28 Sep as settlement_pending (OPS-350). Charging ourselves matches
+      // the network_error case above — under-counting a real payment is the worse error,
+      // because the ceiling stops protecting anything.
+      this.budget.settle(reservation, { note: `unconfirmed_settlement_may_have_landed${settlement?.transaction ? `: ${settlement.transaction}` : ''}` });
     } else if (!settlement || settleError) {
       // No settlement header means settlement was cancelled before it was attempted —
       // the server does that whenever the handler errors. A settleError surviving the
@@ -231,7 +240,8 @@ class ZendIQClient {
           ?? body.error ?? body.message ?? `http ${response.status}`),
       paidUsd: response.ok && !replayed ? priceUsd : 0,
       replayed,
-      settlementTx: settlement?.transaction || null,
+      redeemed: settlement?.redeemed === true,
+      settlementTx: settlement?.transaction || pending?.transaction || null,
     };
   }
 
@@ -292,8 +302,10 @@ class ZendIQClient {
     }
 
     let response;
+    let pending = null;
     try {
-      response = await send(this.http.encodePaymentSignatureHeader(payload));
+      const header = this.http.encodePaymentSignatureHeader(payload);
+      ({ response, pending } = await retryPendingOnce(await send(header), () => send(header), this.pendingRetryMs));
     } catch (err) {
       this.budget.settle(reservation, { note: `network_error: ${err.message.slice(0, 80)}` });
       throw err;
@@ -313,8 +325,16 @@ class ZendIQClient {
 
     if (response.ok && replayed) this.budget.release(reservation, 'served_from_cache_no_second_payment');
     else if (response.ok) this.budget.settle(reservation, { note: settlement?.transaction || 'settled' });
+    // The retry's 409 says whether the first presentation was charged; only a definite no releases it.
+    else if (pending) {
+      if (body?.charged === false) this.budget.release(reservation, 'pending_retry_not_charged');
+      else this.budget.settle(reservation, { note: `unconfirmed_settlement_may_have_landed: ${pending.transaction || 'no signature'}` });
+    }
     // Ambiguous, not a refusal — also covers a settlement that landed but was not confirmed.
-    else if (settleError === 'transaction_failed') this.budget.settle(reservation, { note: 'unconfirmed_settlement_may_have_landed' });
+    // settlement_pending is the hosted facilitator's name for it; releasing it booked a landed charge as unspent (OPS-350).
+    else if (settleError === 'transaction_failed' || settleError === 'settlement_pending') {
+      this.budget.settle(reservation, { note: `unconfirmed_settlement_may_have_landed${settlement?.transaction ? `: ${settlement.transaction}` : ''}` });
+    }
     // No settlement header means the server cancelled settlement before attempting it.
     else if (!settlement || settleError) this.budget.release(reservation, `not_settled_${response.status}`);
     else this.budget.settle(reservation, { note: `unresolved_${response.status}` });
@@ -362,8 +382,29 @@ class ZendIQClient {
           ?? bodyError ?? `http ${response.status}`),
       paidUsd: response.ok && !replayed ? priceUsd : 0,
       replayed,
+      redeemed: settlement?.redeemed === true,
+      settlementTx: settlement?.transaction || pending?.transaction || null,
     };
   }
+}
+
+/**
+ * Present the same payment once more after `settlement_pending` (OPS-350).
+ *
+ * The server may answer before it knows whether the payment landed. If it did, re-presenting the
+ * same authorization redeems it once for a fresh response on the same route; the header is the
+ * agent's only proof of payment, so it is kept for this retry and never re-signed.
+ *
+ * @param {Response} response - First paid response.
+ * @param {() => Promise<Response>} resend - Sends the same payment header again.
+ * @param {number} delayMs - Wait before the retry, giving the server time to see the transfer.
+ * @returns {Promise<{response: Response, pending: object|null}>} Final response, and the pending settlement if retried.
+ */
+async function retryPendingOnce(response, resend, delayMs) {
+  const s = response.status === 402 ? decodeHeader(response.headers.get('PAYMENT-RESPONSE')) : null;
+  if (s?.success !== false || s.errorReason !== 'settlement_pending') return { response, pending: null };
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+  return { response: await resend(), pending: s };
 }
 
 /**

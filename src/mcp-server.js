@@ -47,6 +47,7 @@ const OPTIMIZE_URL = `${BASE_URL}/v1/agent/optimize`;
 const KEYPAIR_PATH = process.env.ZENDIQ_AGENT_KEYPAIR ?? null;
 const NETWORK = process.env.ZENDIQ_AGENT_NETWORK === 'mainnet' ? 'mainnet' : 'devnet';
 const DEMO_EVENTS_URL = process.env.ZENDIQ_DEMO_EVENTS_URL ?? null;
+const PENDING_RETRY_MS = 5_000;
 
 async function emitDemoEvent(type, data = {}) {
   if (!DEMO_EVENTS_URL) return;
@@ -375,7 +376,13 @@ async function callPaid(url, body) {
   });
   const payload = await httpClient.createPaymentPayload(challenge);
   await emitDemoEvent('payment_signed', { network: NETWORK });
-  const paid = await post(httpClient.encodePaymentSignatureHeader(payload));
+  const paymentHeader = httpClient.encodePaymentSignatureHeader(payload);
+  let paid = await post(paymentHeader);
+  // A payment that landed after the server answered is redeemed once by presenting it again (OPS-350).
+  if (paid.status === 402 && settleReason(paid.headers.get('PAYMENT-RESPONSE')) === 'settlement_pending') {
+    await new Promise((resolve) => setTimeout(resolve, PENDING_RETRY_MS));
+    paid = await post(paymentHeader);
+  }
 
   const parsed = await paid.json().catch(() => null);
   if (paid.status === 402) {
@@ -412,6 +419,20 @@ async function callPaid(url, body) {
 }
 
 /**
+ * The facilitator's errorReason from a PAYMENT-RESPONSE header, or null.
+ *
+ * @param {string|null} header - PAYMENT-RESPONSE header, base64 JSON.
+ * @returns {string|null} Reason.
+ */
+function settleReason(header) {
+  try {
+    return header ? JSON.parse(Buffer.from(header, 'base64').toString('utf8'))?.errorReason ?? null : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
  * Explain a 402 that answered a paid request. Only the settlement reason says whether money moved.
  *
  * @param {string|null} header - PAYMENT-RESPONSE header, base64 JSON.
@@ -425,7 +446,7 @@ function paidFailureMessage(header, parsed) {
   } catch (_) { /* header shape is the facilitator's, not ours */ }
   const reason = settle?.errorReason ?? null;
   if (reason === 'settlement_pending') {
-    return 'Settlement could not be confirmed within 90 s, so this payment MAY have been charged. '
+    return 'Settlement could not be confirmed, and a retry with the same payment was not served either, so this payment MAY have been charged. '
       + `Check transaction ${settle.transaction || '(not reported)'} on chain before calling again.`;
   }
   if (reason === 'settlement_failed_on_chain' || reason === 'settlement_not_landed') {

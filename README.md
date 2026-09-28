@@ -67,6 +67,8 @@ The first call after the hosted API has been idle can take 30 seconds or more wh
 
 A paid call can also hold its response for up to 90 seconds while payment settlement is confirmed on chain, which happens when the facilitator cannot confirm the transfer itself. Allow at least 120 seconds on `/analyse` and `/optimize`. MCP hosts often time out a tool call sooner; raise that limit if your host allows it. Details: [Settlement can hold the response](https://zendiq.ai/agents/#settlement).
 
+If that ends in `402` with `settlement_pending`, keep the payment header and retry once with the same header: a payment that landed late is redeemed for one fresh response on the same route, within 24 h. `zendiq-client.js` and the MCP server do this for you. Details: [Retry once after settlement_pending](https://zendiq.ai/agents/#redeem).
+
 ## Where your calls go
 
 **Runs on your machine:** the MCP server (a local stdio adapter), x402 payment signing, the budget ledger, the candidate feed, the triage loop, transaction verification and signing, and the demo visualizer.
