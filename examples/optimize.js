@@ -87,6 +87,7 @@ const SWAP = {
   console.log(`  ${budget.banner()}\n`);
 
   const debugVenue = valueFor('--venue', null);
+  const method = valueFor('--method', null);
   const client = new ZendIQClient({
     signer, budget, baseUrl: BASE_URL, network: NETWORK, rpcUrl: RPC_URL,
     debugKey: DEBUG_KEY,
@@ -98,8 +99,8 @@ const SWAP = {
     console.error(`    ${DEBUG_KEY_FILE}\n`);
     process.exit(1);
   }
-  console.log(`optimize  ${SWAP.amount} ${SWAP.inputMint.slice(0, 4)}… -> ${SWAP.outputMint.slice(0, 4)}…${debugVenue ? `  [forced venue: ${debugVenue}]` : ''}`);
-  const result = await client.optimise({ ...SWAP, taker, ...(debugVenue ? { debugVenue } : {}) });
+  console.log(`optimize  ${SWAP.amount} ${SWAP.inputMint.slice(0, 4)}… -> ${SWAP.outputMint.slice(0, 4)}…${debugVenue ? `  [forced venue: ${debugVenue}]` : ''}${method ? `  [method: ${method}]` : ''}`);
+  const result = await client.optimise({ ...SWAP, taker, ...(debugVenue ? { debugVenue } : {}), ...(method ? { method } : {}) });
 
   if (!result.ok) {
     console.log(`  ${result.status}  ${result.error}`);
@@ -111,7 +112,8 @@ const SWAP = {
   console.log(`  ${result.status}  paid $${result.paidUsd.toFixed(4)}${result.replayed ? ' (replayed)' : ''}`);
   console.log(`\n  venue        ${o.plan?.venueLabel ?? o.plan?.venue}`);
   if (o.plan?.override) {
-    console.log(`  OVERRIDE     forced ${o.plan.override.forcedVenue} — risk would have used ${o.plan.override.riskVenue}`);
+    const forced = o.plan.override.forcedVenue ?? `method ${o.plan.override.method} -> ${o.plan.venue}`;
+    console.log(`  OVERRIDE     forced ${forced} — risk would have used ${o.plan.override.riskVenue}`);
   }
   // plan.priorityFee.control says what requestedLamports means, so the figure is never
   // printed without the qualifier that makes it true.
@@ -125,6 +127,9 @@ const SWAP = {
     : pf.control === 'exact_budget' ? `${applied ?? '—'} lamports applied · budget ${pf.requestedLamports} spent, rounded up to the compute-unit price`
     : `${applied ?? pf.requestedLamports ?? '—'} lamports`;
   console.log(`  priority fee ${pfLine}`);
+  if (o.plan?.jito) {
+    console.log(`  jito tip     ${o.plan.jito.tipLamports} lamports → ${o.plan.jito.tipAccount} (${o.plan.jito.tipSource})`);
+  }
   console.log(`  slippage     ${o.plan?.slippageBps ?? '—'} bps`);
   // Printed in every state. An omitted risk line reads as "nothing to report", which is
   // indistinguishable from "screening never ran" — the case most worth seeing.
@@ -138,9 +143,10 @@ const SWAP = {
   const netBasis = {
     not_claimed_on_this_route: 'not claimed on this route',
     unavailable_no_mev_estimate: 'no MEV estimate available',
+    unavailable_no_sol_price: 'Jito tip could not be priced',
   }[o.netBenefit?.netUsdBasis] ?? 'unavailable';
   console.log(`  net benefit  ${o.netBenefit?.netUsd != null ? `$${o.netBenefit.netUsd.toFixed(4)}` : `— ${netBasis}`}`);
-  console.log(`  transaction  ${typeof o.transaction === 'string' ? `${o.transaction.length} bytes (unsigned)` : 'none'}`);
+  console.log(`  transaction  ${typeof o.transaction === 'string' ? `${Buffer.from(o.transaction, 'base64').length} bytes (unsigned)` : 'none'}`);
   console.log(`  custody      ${o.custody}`);
 
   if (!doExecute) {
@@ -172,13 +178,13 @@ const SWAP = {
     process.exit(1);
   }
 
-  const viaRpc = o.submit?.method === 'rpc_send_transaction';
+  const via = { rpc_send_transaction: 'RPC', jito_bundle: 'Jito bundle', jupiter_ultra_execute: 'Jupiter' }[o.submit?.method] ?? o.submit?.method;
   if (tr.available === false) {
     console.warn(`\n  Note: this token was never screened (${tr.error ?? 'unknown'}).`);
     console.warn(`  Fees were sized as ${tr.assumedLevel ?? 'HIGH'}, but nothing is known about the asset itself.`);
   }
-  console.log(`\n  Signing and submitting via ${viaRpc ? 'RPC' : 'Jupiter'}…`);
-  const exec = await signAndExecute({ order: o, signer: takerSigner.signer });
+  console.log(`\n  Signing and submitting via ${via}…`);
+  const exec = await signAndExecute({ order: o, signer: takerSigner.signer, apiBaseUrl: BASE_URL });
   if (exec.ok) {
     console.log(`  landed     https://solscan.io/tx/${exec.signature}`);
   } else {
@@ -186,5 +192,6 @@ const SWAP = {
     // An unconfirmed send still has a signature worth checking; losing it would strand the trade.
     if (exec.signature) console.log(`  signature  https://solscan.io/tx/${exec.signature}`);
   }
+  if (exec.bundleId) console.log(`  bundle     ${exec.bundleId}${exec.slot != null ? `  slot ${exec.slot}` : ''}`);
   console.log(`\n  ${budget.banner()}\n`);
 })();

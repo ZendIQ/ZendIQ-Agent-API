@@ -4,7 +4,7 @@
     "title": "ZendIQ Agent API",
     "version": "1.3.0",
     "summary": "Execution-layer swap protection for Solana, priced per call over x402.",
-    "description": "Scores token risk and sandwich exposure for a proposed Solana swap and returns a Safe / Protect / Refuse verdict, or an unsigned optimised transaction.\n\nIMPORTANT — NETWORK: the API is in its testing phase, and exactly one thing runs on devnet: paying for the call. Payments settle in **devnet USDC** over x402, which is free test money, so you can integrate and run a full loop without spending real money. Everything the call does runs on **mainnet**, always: token scores, sandwich exposure and quotes are read from mainnet, and /optimize returns a real mainnet transaction, because devnet has no real tokens or liquidity and Jupiter has no devnet deployment. At launch, payment moves to mainnet USDC and nothing else changes; until then, an agent funded only on mainnet cannot pay for a call. The `network` field of GET /v1/agent states the current payment network, so read it there rather than hardcoding it. Note that POST /v1/agent/optimize builds its route against mainnet liquidity, so `taker` must be a mainnet wallet holding the input amount and SOL for fees and rent (a gasless Jupiter Ultra fill is exempt from the SOL), even though the call fee settles in devnet USDC. During testing two wallets are involved, one on each network: the paying wallet signs the x402 payment in devnet USDC and needs no SOL; the `taker` is the mainnet wallet that signs the trade. At launch one mainnet wallet can do both.\n\nCUSTODY: none. ZendIQ never holds keys or funds. /analyse builds no transaction; /optimize returns an unsigned transaction you sign and submit yourself.\n\nLATENCY: most of a call is token screening, shared by all callers and cached per mint for 60 s. A first scan of a token typically takes 5–9 s (measured 4.7–8.5 s on the live service, 25 Sep 2026) and is bounded at ~20 s by per-source timeouts; a mint scanned in the last 60 s returns in under 1 s; /optimize with a valid `analysisId` skips the scan and typically takes 1–2 s. Set your client timeout to at least 30 s. A scan always runs to completion and is never returned partially, because an agent cannot act on a partly scanned token. A source that does not answer within its own timeout is reported as an `unknown` signal inside a completed 200; treat unknown as unknown, never as safe.\n\nHANDSHAKE: /analyse-token and /analyse return an `analysisId`. Pass it to /optimize within 60 s to reuse that token scan; market state (quote, price impact, sandwich exposure, congestion) is always fetched fresh. A missing, expired or unknown ID means a full scan, never an error. An ID for a different mint is rejected with 400 `analysis_mint_mismatch`, uncharged.\n\nAUTHORITATIVE SOURCE: GET /v1/agent returns a live, free, unauthenticated manifest of every endpoint, its price, the rate limits, and the field-stability contract. If this document and that manifest disagree, the manifest is correct.\n\nNot financial advice.",
+    "description": "Scores token risk and sandwich exposure for a proposed Solana swap and returns a Safe / Protect / Refuse verdict, or an unsigned optimised transaction.\n\nIMPORTANT — NETWORK: the API is in its testing phase, and exactly one thing runs on devnet: paying for the call. Payments settle in **devnet USDC** over x402, which is free test money, so you can integrate and run a full loop without spending real money. Everything the call does runs on **mainnet**, always: token scores, sandwich exposure and quotes are read from mainnet, and /optimize returns a real mainnet transaction, because devnet has no real tokens or liquidity and Jupiter has no devnet deployment. At launch, payment moves to mainnet USDC and nothing else changes; until then, an agent funded only on mainnet cannot pay for a call. The `network` field of GET /v1/agent states the current payment network, so read it there rather than hardcoding it. Note that POST /v1/agent/optimize builds its route against mainnet liquidity, so `taker` must be a mainnet wallet holding the input amount and SOL for fees and rent (a gasless Jupiter Ultra fill is exempt from the SOL), even though the call fee settles in devnet USDC. During testing two wallets are involved, one on each network: the paying wallet signs the x402 payment in devnet USDC and needs no SOL; the `taker` is the mainnet wallet that signs the trade. At launch one mainnet wallet can do both.\n\nCUSTODY: none. ZendIQ never holds keys or funds. /analyse builds no transaction; /optimize returns an unsigned transaction you sign and submit yourself.\n\nLATENCY: most of a call is token screening, shared by all callers and cached per mint for 60 s. A first scan of a token typically takes 5–9 s (measured 4.7–8.5 s on the live service, 25 Sep 2026) and is bounded at ~20 s by per-source timeouts; a mint scanned in the last 60 s returns in under 1 s; /optimize with a valid `analysisId` skips the scan and typically takes 1–2 s. Set your client timeout to at least 120 s on /analyse and /optimize (see SETTLEMENT) and at least 30 s on /analyse-token. A scan always runs to completion and is never returned partially, because an agent cannot act on a partly scanned token. A source that does not answer within its own timeout is reported as an `unknown` signal inside a completed 200; treat unknown as unknown, never as safe.\n\nSETTLEMENT: a paid call replies only once the server knows whether your payment landed, usually within a second or two. If the facilitator cannot confirm the transfer itself, the server reads the chain until the transfer confirms, fails, or can no longer land because its blockhash expired (about 60 s after you signed), and never waits more than 90 s. Keep the connection open. A 402 after a paid attempt carries a PAYMENT-RESPONSE header whose `errorReason` says what happened: `settlement_failed_on_chain` or `settlement_not_landed` means you were not charged; `settlement_pending` means it could not be confirmed either way, so look up that header's `transaction` on chain before paying again.\n\nHANDSHAKE: /analyse-token and /analyse return an `analysisId`. Pass it to /optimize within 60 s to reuse that token scan; market state (quote, price impact, sandwich exposure, congestion) is always fetched fresh. A missing, expired or unknown ID means a full scan, never an error. An ID for a different mint is rejected with 400 `analysis_mint_mismatch`, uncharged.\n\nAUTHORITATIVE SOURCE: GET /v1/agent returns a live, free, unauthenticated manifest of every endpoint, its price, the rate limits, and the field-stability contract. If this document and that manifest disagree, the manifest is correct.\n\nNot financial advice.",
     "contact": { "name": "ZendIQ", "url": "https://zendiq.ai/agents/" },
     "license": { "name": "See repository", "url": "https://github.com/ZendIQ/ZendIQ-Agent-API" }
   },
@@ -76,7 +76,7 @@
         "operationId": "analyseSwap",
         "tags": ["triage"],
         "summary": "Verdict for a proposed swap ($0.01)",
-        "description": "Costs $0.01, paid over x402. Returns a Safe / Protect / Refuse verdict with token risk, sandwich exposure, and a recommended execution path. Builds no transaction. Always settles on success, because the verdict itself is the deliverable — a Refuse verdict is a useful answer, not a failure. Returns an `analysisId` for the token scan of `outputMint`, reusable by /optimize for 60 s. A first scan of a token can take up to ~20 s; set a client timeout of at least 30 s.",
+        "description": "Costs $0.01, paid over x402. Returns a Safe / Protect / Refuse verdict with token risk, sandwich exposure, and a recommended execution path. Builds no transaction. Always settles on success, because the verdict itself is the deliverable — a Refuse verdict is a useful answer, not a failure. Returns an `analysisId` for the token scan of `outputMint`, reusable by /optimize for 60 s. A first scan of a token can take up to ~20 s and settlement up to 90 s; set a client timeout of at least 120 s.",
         "requestBody": {
           "required": true,
           "content": {
@@ -108,7 +108,7 @@
         "operationId": "optimizeSwap",
         "tags": ["triage"],
         "summary": "Unsigned optimised transaction ($0.02)",
-        "description": "Costs $0.02, paid over x402. Returns an unsigned swap transaction, the structured `plan` it is supposed to contain, how to `submit` it, a simulation result, and an itemised `netBenefit` breakdown. The venue is chosen by risk, then by net benefit: a Jupiter route, or a direct venue when it beats that route after costs (`plan.venueDecision` shows the comparison) — read `plan.venue` and follow `submit` rather than assuming one. Verify the decoded transaction against `plan` before signing — do not blind-sign. A failed build returns >= 400 and charges nothing.\n\nThis endpoint returns no verdict and does not refuse a trade: it builds a transaction even for a token that scores CRITICAL. Check `tokenRisk` before signing, or call /analyse first.\n\nPass `analysisId` from /analyse-token or /analyse (for this `outputMint`, within 60 s) to skip the token scan; the call then typically takes 1–2 s. `analysis` states whether the scan was reused, served from the shared 60 s cache, or run fresh, and why. A missing, expired or unknown ID means a full scan, never an error; an ID for another mint is 400 `analysis_mint_mismatch`, uncharged. Without a usable ID a first scan can take up to ~20 s; set a client timeout of at least 30 s.\n\nThe route is built against mainnet liquidity, so `taker` is a mainnet wallet, and not the wallet that pays for the call (that one holds devnet USDC and needs no SOL). The `taker` must hold the input amount and mainnet SOL for the network fee, any priority fee, and rent for token accounts the swap opens; on a SOL input the SOL being swapped comes on top. A gasless Jupiter Ultra fill, where `plan.priorityFee.feePayer` is not the `taker`, is exempt from the SOL. A `taker` that cannot fund the trade gets 422 `taker_insufficient_balance`, uncharged, naming the token and the shortfall.\n\nBuild-only trial: `taker` is only a public key and nothing is signed here, so any funded mainnet address can be passed to see the full `plan`, `simulation` and `plan.venueDecision`. A transaction built for a wallet you do not control cannot be signed or submitted; to land a trade, pass your own wallet.",
+        "description": "Costs $0.02, paid over x402. Returns an unsigned swap transaction, the structured `plan` it is supposed to contain, how to `submit` it, a simulation result, and an itemised `netBenefit` breakdown. The venue is chosen by risk, then by net benefit: a Jupiter route, or a direct venue when it beats that route after costs (`plan.venueDecision` shows the comparison) — read `plan.venue` and follow `submit` rather than assuming one. Verify the decoded transaction against `plan` before signing — do not blind-sign. A failed build returns >= 400 and charges nothing.\n\nThis endpoint returns no verdict and does not refuse a trade: it builds a transaction even for a token that scores CRITICAL. Check `tokenRisk` before signing, or call /analyse first.\n\nPass `analysisId` from /analyse-token or /analyse (for this `outputMint`, within 60 s) to skip the token scan; the call then typically takes 1–2 s. `analysis` states whether the scan was reused, served from the shared 60 s cache, or run fresh, and why. A missing, expired or unknown ID means a full scan, never an error; an ID for another mint is 400 `analysis_mint_mismatch`, uncharged. Without a usable ID a first scan can take up to ~20 s, and settlement can add up to 90 s; set a client timeout of at least 120 s.\n\nThe route is built against mainnet liquidity, so `taker` is a mainnet wallet, and not the wallet that pays for the call (that one holds devnet USDC and needs no SOL). The `taker` must hold the input amount and mainnet SOL for the network fee, any priority fee, and rent for token accounts the swap opens; on a SOL input the SOL being swapped comes on top. A gasless Jupiter Ultra fill, where `plan.priorityFee.feePayer` is not the `taker`, is exempt from the SOL. A `taker` that cannot fund the trade gets 422 `taker_insufficient_balance`, uncharged, naming the token and the shortfall.\n\nBuild-only trial: `taker` is only a public key and nothing is signed here, so any funded mainnet address can be passed to see the full `plan`, `simulation` and `plan.venueDecision`. A transaction built for a wallet you do not control cannot be signed or submitted; to land a trade, pass your own wallet.",
         "requestBody": {
           "required": true,
           "content": {
@@ -133,6 +133,67 @@
           "429": { "$ref": "#/components/responses/RateLimited" },
           "500": { "$ref": "#/components/responses/InternalError" },
           "502": { "$ref": "#/components/responses/OptimizeUnavailable" }
+        }
+      }
+    },
+    "/v1/agent/bundle": {
+      "post": {
+        "operationId": "submitBundle",
+        "tags": ["triage"],
+        "summary": "Submit a signed Jito bundle transaction (free)",
+        "description": "Free and rate-limited; you paid at /optimize. Forwards a signed transaction from an /optimize response with submit.method jito_bundle to Jito's block engine under ZendIQ's whitelisted key, then reports landing, read from the chain. Only a transaction that pays a non-zero tip to a Jito tip account, whose message is exactly one /optimize issued in the last 5 minutes, and whose fee-payer signature verifies is forwarded. Idempotent: posting the same signed transaction again returns the first submission with replayed: true and a fresh status check; a second bundle is never sent. not_landed is reported only when the blockhash has expired and the signature is not on chain; a status check that could not run is unknown.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["signedTransaction"],
+                "properties": { "signedTransaction": { "type": "string", "contentEncoding": "base64" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Submitted (or replayed). Read `state`.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BundleSubmission" } } }
+          },
+          "400": {
+            "description": "invalid_request, invalid_transaction (undecodable or unsigned) or invalid_signature. Nothing was sent.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "422": {
+            "description": "no_jito_tip (the transaction pays no tip to a Jito tip account) or transaction_not_issued (not a transaction /optimize returned, issued over 5 minutes ago, or before a server restart). Nothing was sent.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "429": {
+            "description": "rate_limited: Jito submissions are rate-limited across all callers and nothing was sent. Retry the same signed transaction after Retry-After seconds.",
+            "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "500": {
+            "description": "Unexpected error. The bundle may or may not have been sent; check the signature on chain before signing a new transaction.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/v1/agent/bundle/{signature}": {
+      "get": {
+        "operationId": "bundleStatus",
+        "tags": ["triage"],
+        "summary": "Status of a bundle submitted through this server (free)",
+        "parameters": [{ "name": "signature", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": {
+            "description": "Current state, re-checked on chain unless already terminal.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BundleSubmission" } } }
+          },
+          "404": {
+            "description": "unknown_submission: no submission with this signature was made through this server in the last 30 minutes.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
         }
       }
     }
@@ -166,8 +227,11 @@
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
       "PaymentRequired": {
-        "description": "Payment required. Sign an authorization for exactly the amount in the PAYMENT-REQUIRED header and retry the identical request with a PAYMENT-SIGNATURE header (X-PAYMENT is accepted as an alias; a bare PAYMENT header is not read). This is the normal first response to a paid endpoint, not an error.",
-        "headers": { "PAYMENT-REQUIRED": { "$ref": "#/components/headers/PaymentRequired" } }
+        "description": "Payment required. Sign an authorization for exactly the amount in the PAYMENT-REQUIRED header and retry the identical request with a PAYMENT-SIGNATURE header (X-PAYMENT is accepted as an alias; a bare PAYMENT header is not read). This is the normal first response to a paid endpoint, not an error. A 402 in reply to a paid attempt instead carries a PAYMENT-RESPONSE header: its `errorReason` `settlement_failed_on_chain` or `settlement_not_landed` means the transfer did not move and you were not charged; `settlement_pending` means it could not be confirmed within 90 s and may have landed, so look up its `transaction` on chain before paying again.",
+        "headers": {
+          "PAYMENT-REQUIRED": { "$ref": "#/components/headers/PaymentRequired" },
+          "PAYMENT-RESPONSE": { "$ref": "#/components/headers/PaymentResponse" }
+        }
       },
       "RateLimited": {
         "description": "Rate limited: 60 requests per IP per minute, 30 per payer per minute. Does not consume a payment authorization — present the same one again after Retry-After.",
@@ -180,7 +244,7 @@
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RateLimitError" } } }
       },
       "AuthorizationAlreadyUsed": {
-        "description": "This payment authorization was already presented and has not settled into a result that can be replayed. Read `priorOutcome`: `in_flight` means retry shortly with the same authorization; any other value means request a fresh 402 challenge — except `settle_threw`, where the transfer may have landed and paying again could double-charge. A replay of an authorization that did settle is not a 409: it returns the original 200 body with `replayed: true`.",
+        "description": "This payment authorization was already presented and has not settled into a result that can be replayed. Read `priorOutcome`: `in_flight` means retry shortly with the same authorization; any other value means request a fresh 402 challenge — except `settle_threw` and `settle_unknown`, where the transfer may have landed and paying again could double-charge; check it on chain first. A replay of an authorization that did settle is not a 409: it returns the original 200 body with `replayed: true`.",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthorizationError" } } }
       },
       "InternalError": {
@@ -447,6 +511,11 @@
                 "type": "string",
                 "maxLength": 128,
                 "description": "Optional. The `analysisId` from /analyse-token or /analyse for this `outputMint`, within 60 s of issue. Reuses that token scan (authorities, holders, RugCheck, launch platform, age, creator history, bundled-launch check); the quote, price impact, sandwich exposure and congestion are always fetched fresh. A missing, expired or unknown ID means a full scan, never an error. An ID for a different mint is rejected with 400 `analysis_mint_mismatch`, uncharged."
+              },
+              "method": {
+                "type": "string",
+                "enum": ["jito"],
+                "description": "Optional. `jito` forces a Jito bundle venue (raydium_jito or jupiter_swap_jito), even where risk scoring would not bundle. Only bundle venues are considered, ranked by net value after tip, and no unbundled route is substituted if none builds. `plan.choice` is then `forced`. Any other value is 400."
               }
             }
           }
@@ -554,8 +623,13 @@
                 "properties": {
                   "venue": {
                     "type": "string",
-                    "description": "jupiter_ultra or jupiter_swap under risk-based selection, or raydium when its direct quote beats that Jupiter route after costs (see venueDecision). Other venue names appear only when a venue was forced through the authenticated debug override, in which case `override` is non-null. Treat unrecognised values as unknown, not as an error.",
-                    "examples": ["jupiter_ultra", "jupiter_swap", "raydium"]
+                    "description": "jupiter_ultra or jupiter_swap under risk-based selection; raydium when its direct quote beats that Jupiter route after costs; raydium_jito or jupiter_swap_jito (a Jito bundle) when sandwich exposure drives the verdict and the bundle beats the Jupiter route after its tip, or when the request sent method: jito (see venueDecision and choice). Other venue names appear only when a venue was forced through the authenticated debug override, in which case `override` is non-null. Treat unrecognised values as unknown, not as an error.",
+                    "examples": ["jupiter_ultra", "jupiter_swap", "raydium", "raydium_jito", "jupiter_swap_jito"]
+                  },
+                  "choice": {
+                    "type": "string",
+                    "enum": ["selected", "forced"],
+                    "description": "selected = ZendIQ chose the venue. forced = the request forced it (method: jito, or the debug override); `override` says how, and the plan is not a risk-derived routing decision."
                   },
                   "venueLabel": { "type": "string" },
                   "venueFallback": {
@@ -567,8 +641,8 @@
                     "description": "Experimental. The cross-venue comparison behind `venue`. netUsd = outUsd + unspentInputUsd − priorityFeeUsd − tipUsd − expectedMevLossUsd, per candidate. A direct venue wins only when it beats the Jupiter baseline by more than marginUsd; Jupiter wins ties and anything unpriced.",
                     "properties": {
                       "evaluated": { "type": "boolean" },
-                      "basis": { "type": "string", "enum": ["net_benefit", "unavailable_no_usd_rates", "unavailable_baseline_unpriced", "not_evaluated_venue_forced"] },
-                      "baseline": { "type": "string", "description": "The Jupiter venue risk scoring selected." },
+                      "basis": { "type": "string", "enum": ["net_benefit", "unavailable_no_usd_rates", "unavailable_baseline_unpriced", "not_evaluated_venue_forced", "forced_method_ranked", "forced_method_unpriced"], "description": "forced_method_* = method: jito; bundle venues were ranked against each other only, with no baseline." },
+                      "baseline": { "type": ["string", "null"], "description": "The Jupiter venue risk scoring selected. Null under method: jito." },
                       "chosen": { "type": "string", "description": "The ranking's winner. If it could not be built, `plan.venue` differs and `plan.venueFallback` says why." },
                       "marginUsd": { "type": "number", "description": "The larger of $0.005 and 0.1% of the trade." },
                       "advantageUsd": { "type": ["number", "null"], "description": "Winner's netUsd minus the baseline's; null when the baseline was kept." },
@@ -578,7 +652,8 @@
                           "type": "object",
                           "properties": {
                             "venue": { "type": "string" },
-                            "status": { "type": "string", "enum": ["quoted", "ineligible", "failed", "unknown"], "description": "unknown = the quote was slower than 2.5 s or a cost could not be priced; it does not compete." },
+                            "status": { "type": "string", "enum": ["quoted", "ineligible", "failed", "unknown", "build_failed"], "description": "unknown = the quote was slower than 2.5 s or a cost could not be priced; it does not compete. build_failed = it won but could not be built (see buildError), so the next venue was built." },
+                            "buildError": { "type": "string", "description": "Present on build_failed, for example a route too large to carry a Jito tip under the 1,232-byte limit." },
                             "reason": { "type": ["string", "null"], "description": "Why the venue is ineligible." },
                             "error": { "type": ["string", "null"] },
                             "inAmount": { "type": "string" },
@@ -597,25 +672,57 @@
                   },
                   "override": {
                     "type": ["object", "null"],
-                    "description": "Null unless a venue was forced for testing. When present, this plan does not reflect risk-based routing.",
+                    "description": "Null unless the venue was forced: by method: jito (enabledBy request) or for testing (enabledBy AGENT_DEBUG_KEY). When present, this plan does not reflect risk-based routing.",
                     "properties": {
-                      "forcedVenue": { "type": "string" },
+                      "forcedVenue": { "type": ["string", "null"] },
+                      "method": { "type": ["string", "null"], "examples": ["jito"] },
                       "riskVenue": { "type": "string" },
-                      "enabledBy": { "type": "string" },
+                      "enabledBy": { "type": "string", "enum": ["request", "AGENT_DEBUG_KEY"] },
                       "warning": { "type": "string" }
                     }
                   },
                   "bundle": { "type": "boolean" },
                   "mevProtection": {
                     "type": "string",
-                    "description": "upstream = the venue provides MEV protection (Ultra). none = the route is exposed like any pool swap; a priority fee buys inclusion, not protection.",
-                    "enum": ["upstream", "none"]
+                    "description": "upstream = the venue provides MEV protection (Ultra). jito_bundle = the transaction carries a Jito tip and is submitted through /v1/agent/bundle to Jito's block engine rather than the public mempool; it lands whole or not at all. none = the route is exposed like any pool swap; a priority fee buys inclusion, not protection.",
+                    "enum": ["upstream", "jito_bundle", "none"]
+                  },
+                  "jito": {
+                    "type": ["object", "null"],
+                    "description": "Present on bundle venues. The tip is the last instruction of the swap transaction: a SystemProgram transfer from the fee payer to tipAccount.",
+                    "properties": {
+                      "tipLamports": { "type": "integer", "description": "At least 1,000,000." },
+                      "tipUsd": { "type": ["number", "null"] },
+                      "tipAccount": { "type": "string" },
+                      "tipSource": { "type": ["string", "null"], "enum": ["zendiq_risk_model", "bundle_tip_floor", null] },
+                      "tipInstruction": { "type": "string" },
+                      "bytes": { "type": "integer", "description": "Size of the transaction with the tip." },
+                      "headroomBytes": { "type": "integer", "description": "1,232 minus bytes." },
+                      "lookupTable": {
+                        "type": ["object", "null"],
+                        "description": "jupiter_swap_jito only. The frozen ZendIQ address lookup table (HHhmPLodSmawV1EtMCNBiQTHdYpECQB2X7w1MbM6pdEw), verified at server start to be frozen, active and hold exactly its 17 protocol-wide addresses. A table that fails that check makes jupiter_swap_jito refuse to build.",
+                        "properties": {
+                          "address": { "type": "string" },
+                          "frozen": { "const": true },
+                          "active": { "const": true },
+                          "used": { "type": "boolean", "description": "Whether the transaction resolves accounts through it. When compiling without it is smaller, the smaller transaction is kept." },
+                          "verifiedAtSlot": { "type": ["integer", "null"], "description": "Slot of the start-up verification." },
+                          "verifiedAt": { "type": "string", "format": "date-time" },
+                          "writtenInFull": {
+                            "type": "object",
+                            "description": "Non-signer, non-program accounts no table resolved. An account outside the table costs 32 bytes and never causes a refusal.",
+                            "properties": { "accounts": { "type": "integer" }, "bytes": { "type": "integer" } }
+                          }
+                        }
+                      }
+                    }
                   },
                   "transaction": {
                     "type": "object",
                     "description": "Experimental. Read from the returned transaction's own bytes, so the venue and protection claims can be checked rather than trusted. A transaction whose programs contradict plan.venue, a bundle with no Jito tip, or a transaction whose venue cannot be verified (from its programs, or on jupiter_ultra from its provenance) is never returned: the call fails with optimize_unavailable and is not charged.",
                     "properties": {
                       "programs": { "type": "array", "items": { "type": "string" }, "description": "Top-level program ids invoked by the transaction, including a third-party router's." },
+                      "bytes": { "type": "integer", "description": "Size of the returned transaction." },
                       "venueVerified": { "type": "boolean", "description": "Always true in a returned plan. A transaction whose venue cannot be verified is refused, never returned with false." },
                       "verifiedBy": { "type": "string", "enum": ["programs", "provenance"], "description": "How the venue was verified. programs: a program belonging to plan.venue is present. provenance: jupiter_ultra only, when Ultra filled through a third-party router (plan.route.router) whose programs are not published; the bytes are exactly the transaction Ultra returned for this requestId, the taker signs it, and Ultra /execute only lands that transaction. Provenance never excuses undecodable bytes or a bundle without a tip." },
                       "jitoTip": {
@@ -654,13 +761,14 @@
                 "properties": {
                   "method": {
                     "type": "string",
-                    "description": "jupiter_ultra_execute: POST `body` to `url`; broadcasting yourself forfeits Ultra's MEV protection and invalidates netBenefit. rpc_send_transaction: send to your own Solana RPC; the priority fee is already inside.",
-                    "enum": ["jupiter_ultra_execute", "rpc_send_transaction"]
+                    "description": "jupiter_ultra_execute: POST `body` to `url`; broadcasting yourself forfeits Ultra's MEV protection and invalidates netBenefit. rpc_send_transaction: send to your own Solana RPC; the priority fee is already inside. jito_bundle: POST { signedTransaction } to `path` on this API (free); ZendIQ forwards it to Jito under its whitelisted key. Never send a jito_bundle transaction to an RPC or a block engine yourself.",
+                    "enum": ["jupiter_ultra_execute", "rpc_send_transaction", "jito_bundle"]
                   },
+                  "path": { "type": "string", "description": "Present on jito_bundle.", "examples": ["/v1/agent/bundle"] },
                   "url": { "type": "string", "description": "Present on jupiter_ultra_execute.", "examples": ["https://lite-api.jup.ag/ultra/v1/execute"] },
                   "requestId": { "type": ["string", "null"] },
                   "body": { "type": "string", "description": "Present on jupiter_ultra_execute.", "examples": ["{ signedTransaction, requestId }"] },
-                  "lastValidBlockHeight": { "type": ["integer", "null"], "description": "Present on rpc_send_transaction. Null when the venue embedded a blockhash whose remaining validity is unknown — send promptly." },
+                  "lastValidBlockHeight": { "type": ["integer", "null"], "description": "Present on rpc_send_transaction and jito_bundle. Null when the venue embedded a blockhash whose remaining validity is unknown — send promptly." },
                   "note": { "type": "string" }
                 },
                 "required": ["method"]
@@ -680,8 +788,8 @@
                   "netUsd": { "type": ["number", "null"], "description": "Read netUsdBasis before treating null as a failure." },
                   "netUsdBasis": {
                     "type": "string",
-                    "description": "Why netUsd has the value it does. not_claimed_on_this_route = null by design: the route provides no MEV protection, so no avoided-loss credit is claimed.",
-                    "enum": ["computed", "unavailable_no_mev_estimate", "not_claimed_on_this_route"]
+                    "description": "Why netUsd has the value it does. not_claimed_on_this_route = null by design: the route provides no MEV protection, so no avoided-loss credit is claimed. unavailable_no_sol_price = a bundle's Jito tip could not be priced, so no net is stated.",
+                    "enum": ["computed", "unavailable_no_mev_estimate", "not_claimed_on_this_route", "unavailable_no_sol_price"]
                   },
                   "note": { "type": "string" }
                 }
@@ -700,7 +808,7 @@
               "transaction": {
                 "type": "string",
                 "contentEncoding": "base64",
-                "description": "Unsigned VersionedTransaction. ZendIQ cannot submit it and never sees a key."
+                "description": "Unsigned VersionedTransaction. ZendIQ never sees a key. On a jito_bundle venue ZendIQ broadcasts it after you sign it, and only those exact bytes."
               },
               "requestId": { "type": ["string", "null"], "description": "Always present. Non-null only on jupiter_ultra, where it is required for /execute." },
               "custody": { "type": "string", "examples": ["none — transaction is unsigned; sign and submit with your own wallet"] },
@@ -710,6 +818,41 @@
             "required": ["plan", "submit", "netBenefit", "transaction", "requestId", "custody"]
           }
         ]
+      },
+      "BundleSubmission": {
+        "type": "object",
+        "properties": {
+          "signature": { "type": "string" },
+          "bundleId": { "type": ["string", "null"] },
+          "acceptedBy": { "type": ["string", "null"], "description": "The Jito region that accepted the bundle.", "examples": ["slc"] },
+          "state": {
+            "type": "string",
+            "enum": ["landed", "failed_on_chain", "pending", "not_landed", "unknown", "rejected"],
+            "description": "landed = on chain. failed_on_chain = included, but the swap failed (err); it did not execute. pending = accepted, not yet on chain, blockhash still valid: poll the GET, do not sign a new transaction yet. not_landed = the blockhash expired and the signature is not on chain; nothing was charged. unknown = landing could not be confirmed either way; it may have landed, so poll before retrying. rejected = every block engine refused it (errors); it cannot land."
+          },
+          "slot": { "type": ["integer", "null"] },
+          "err": { "type": ["object", "string", "null"] },
+          "jitoTip": { "type": "object", "properties": { "lamports": { "type": "integer" }, "account": { "type": "string" } } },
+          "submittedAt": { "type": "string", "format": "date-time" },
+          "replayed": { "type": "boolean", "description": "True when this is the first submission's record, returned to a repeat post or a status read." },
+          "errors": { "type": ["array", "null"], "items": { "type": "string" } },
+          "diagnosis": {
+            "type": ["object", "null"],
+            "description": "Set only when state is not_landed: Jito's view of why. Informational; landing is judged on chain. A source that could not be read is listed in `errors` and its fields are null, never guessed.",
+            "properties": {
+              "jitoStatus": { "type": ["string", "null"], "enum": ["Pending", "Landed", "Failed", "Invalid", null], "description": "From getInflightBundleStatuses on the accepting region. Invalid = not in Jito's 5-minute tracker." },
+              "jitoNote": { "type": ["string", "null"] },
+              "region": { "type": ["string", "null"] },
+              "landedSlot": { "type": ["integer", "null"] },
+              "tipLamports": { "type": ["integer", "null"] },
+              "tipFloorLamports": { "type": ["object", "null"], "description": "Recent landed-tip percentiles.", "properties": { "p25": { "type": "integer" }, "p50": { "type": "integer" }, "p75": { "type": "integer" } } },
+              "tipBelowMedian": { "type": ["boolean", "null"] },
+              "errors": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "note": { "type": "string" }
+        },
+        "required": ["signature", "state", "replayed"]
       },
       "ServiceManifest": {
         "type": "object",
@@ -751,6 +894,25 @@
               "perIpPerMinute": { "type": "integer" },
               "perPayerPerMinute": { "type": "integer" },
               "note": { "type": "string" }
+            }
+          },
+          "bundleLookupTable": {
+            "type": "object",
+            "description": "Result of the start-up check on the frozen ZendIQ address lookup table. When verified is false, jupiter_swap_jito refuses to build until a restart verifies it; nothing else is affected.",
+            "properties": {
+              "address": { "type": ["string", "null"], "examples": ["HHhmPLodSmawV1EtMCNBiQTHdYpECQB2X7w1MbM6pdEw"] },
+              "verified": { "type": "boolean", "description": "Frozen, active and holding exactly its 17 protocol-wide addresses." },
+              "verifiedAtSlot": { "type": ["integer", "null"] },
+              "error": { "type": ["string", "null"] }
+            }
+          },
+          "bundleRegions": {
+            "type": "object",
+            "description": "Result of the start-up check on the Jito block-engine regions bundles are forwarded to. When valid is false, every bundle venue refuses to build and method \"jito\" returns optimize_unavailable, uncharged, until a restart with a valid configuration.",
+            "properties": {
+              "regions": { "type": "array", "items": { "type": "string" }, "examples": [["ny", "slc"]], "description": "Block engines each bundle is sent to. Empty when valid is false." },
+              "valid": { "type": "boolean" },
+              "error": { "type": ["string", "null"] }
             }
           },
           "custody": { "type": "string" }

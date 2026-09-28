@@ -23,6 +23,7 @@ const SWAP = {
   amount: valueFor('--amount', '500000000'),
   slippageBps: Number(valueFor('--slippage', '100')),
 };
+const METHOD = valueFor('--method', null);
 const STATE_DIR = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
 const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(STATE_DIR, `budget-${NETWORK}.json`);
 const KEY_FILE = process.env.ZENDIQ_AGENT_KEYPAIR ?? path.join(STATE_DIR, `agent-${NETWORK}.key.json`);
@@ -123,7 +124,7 @@ async function main() {
   const emitExec = (type, data) => { eventQueue = eventQueue.then(() => emit(type, 'exec', data)); return eventQueue; };
 
   const optimizeResult = await client.optimise(
-    { ...SWAP, taker: TAKER },
+    { ...SWAP, taker: TAKER, ...(METHOD ? { method: METHOD } : {}) },
     { onEvent: (type, data) => { emitExec(type, data); } },
   );
   await eventQueue;
@@ -135,16 +136,29 @@ async function main() {
     await emitExec('execution_skipped', {
       reason: 'simulation_only',
       simulation: optimizeResult.order.simulation?.status ?? null,
+      submitMethod: optimizeResult.order.submit?.method ?? null,
     });
     console.log(`Optimize complete (stopped at simulation): ${optimizeResult.order.plan?.venueLabel ?? optimizeResult.order.plan?.venue}`);
   } else {
     const takerKeyFile = process.env.ZENDIQ_TAKER_KEYPAIR;
     if (!takerKeyFile) throw new Error('--execute requires ZENDIQ_TAKER_KEYPAIR (mainnet keypair for the taker wallet)');
+    const sim = optimizeResult.order.simulation?.status ?? null;
+    if (sim !== 'ok') {
+      // Same rule as the CLI: never sign a transaction whose simulation did not pass.
+      await emitExec('call_failed', { message: `Not signed: simulation ${sim ?? 'unavailable'}` });
+      await eventQueue;
+      console.log(`Execution refused: simulation ${sim ?? 'unavailable'}`);
+      process.exitCode = 2;
+      return;
+    }
     const taker = await loadAgentSigner({ network: 'mainnet', file: takerKeyFile });
-    await emitExec('signing', { wallet: taker.address });
-    await emitExec('executing', {});
-    const exec = await signAndExecute({ order: optimizeResult.order, signer: taker.signer });
-    if (exec.ok) await emitExec('executed', { signature: exec.signature });
+    // A bundle is posted back to the API that built it, never to a default host.
+    const exec = await signAndExecute({
+      order: optimizeResult.order, signer: taker.signer, apiBaseUrl: BASE_URL,
+      onEvent: (type, data) => emitExec(type, data),
+    });
+    await eventQueue;
+    if (exec.ok) await emitExec('executed', { signature: exec.signature, slot: exec.slot ?? null, bundleId: exec.bundleId ?? null });
     else await emitExec('call_failed', { status: exec.status, message: exec.error ?? exec.status });
     await eventQueue;
     console.log(`Execution ${exec.ok ? 'landed' : 'failed'}: ${exec.signature ?? exec.status}`);

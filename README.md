@@ -65,6 +65,8 @@ Set variables in your shell. Nothing in this repository loads a `.env` file; `.e
 
 The first call after the hosted API has been idle can take 30 seconds or more while it wakes; later calls are fast. A slow first call is not a failure.
 
+A paid call can also hold its response for up to 90 seconds while payment settlement is confirmed on chain, which happens when the facilitator cannot confirm the transfer itself. Allow at least 120 seconds on `/analyse` and `/optimize`. MCP hosts often time out a tool call sooner; raise that limit if your host allows it. Details: [Settlement can hold the response](https://zendiq.ai/agents/#settlement).
+
 ## Where your calls go
 
 **Runs on your machine:** the MCP server (a local stdio adapter), x402 payment signing, the budget ledger, the candidate feed, the triage loop, transaction verification and signing, and the demo visualizer.
@@ -126,6 +128,7 @@ The full risk breakdown (token-risk factors, sandwich exposure, provenance finge
 | `amount` | string | yes | Amount to sell, in the input mint's atomic units |
 | `taker` | string | yes | Base58 mainnet wallet the swap is built for; must hold the input amount and SOL for fees and rent (a gasless Jupiter Ultra fill is exempt from the SOL) |
 | `slippageBps` | integer | no | Slippage tolerance in basis points; omit for the route default |
+| `method` | `"jito"` | no | Force a Jito bundle venue even where risk scoring would not bundle. `plan.choice` is then `forced`; no unbundled route is substituted if none builds. Submit the signed bundle to `POST /v1/agent/bundle` |
 
 This tool returns token risk and sandwich exposure, but **not** the `verdict` — it assumes the decision has been taken. Call `zendiq_triage_swap` if you still need the verdict. Each call costs `$0.02` in USDC; a build that fails charges nothing.
 

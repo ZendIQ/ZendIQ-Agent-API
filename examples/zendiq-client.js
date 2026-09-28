@@ -29,6 +29,9 @@ const { getTransactionDecoder, getBase64EncodedWireTransaction, partiallySignTra
 
 const USDC_DECIMALS = 6;
 
+/** ZendIQ's bundle submit endpoint (OPS-322); signed bundle transactions go nowhere else. */
+const BUNDLE_SUBMIT_PATH = '/v1/agent/bundle';
+
 /**
  * @param {string|null} value - Base64 header value.
  * @returns {object|null} Decoded JSON, or null.
@@ -318,18 +321,31 @@ class ZendIQClient {
 
     if (response.ok) {
       await onEvent('payment_settled', { priceUsd: replayed ? 0 : priceUsd, replayed, tx: settlement?.transaction || null });
+      if (body.plan?.jito) {
+        await onEvent('bundle_built', {
+          venue: body.plan?.venueLabel ?? body.plan?.venue ?? null,
+          choice: body.plan?.choice ?? null,
+          tipLamports: body.plan.jito.tipLamports ?? null,
+          tipSource: body.plan.jito.tipSource ?? null,
+          priorityFeeLamports: body.plan?.priorityFee?.appliedLamports ?? null,
+          bytes: body.plan.jito.bytes ?? null,
+          headroomBytes: body.plan.jito.headroomBytes ?? null,
+          lookupTableUsed: body.plan.jito.lookupTable?.used ?? null,
+        });
+      }
       await onEvent('order_ready', {
         venue: body.plan?.venueLabel ?? body.plan?.venue ?? null,
+        choice: body.plan?.choice ?? null,
+        forcedMethod: body.plan?.override?.method ?? null,
         slippageBps: body.plan?.slippageBps ?? null,
         simulation: body.simulation?.status ?? null,
         outAmount: body.plan?.route?.outAmount ?? null,
         priorityFee: body.plan?.priorityFee ?? null,
         submitMethod: body.submit?.method ?? null,
         hasTransaction: typeof body.transaction === 'string' && body.transaction.length > 100,
+        bytes: typeof body.transaction === 'string' ? Buffer.from(body.transaction, 'base64').length : null,
         requestId: body.requestId ?? null,
       });
-    } else {
-      await onEvent('call_failed', { status: response.status });
     }
 
     // `error` is the code and `message` the detail; reporting only the code turns an
@@ -407,13 +423,53 @@ async function signAndExecute({
   signer,
   executeUrl = 'https://lite-api.jup.ag/ultra/v1/execute',
   rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+  apiBaseUrl = 'https://zendiq-backend.onrender.com',
+  onEvent = () => {},
+  bundlePollMs = 60_000,
 }) {
   const txBytes = Uint8Array.from(Buffer.from(order.transaction, 'base64'));
   const decoded = getTransactionDecoder().decode(txBytes);
   const signed = await partiallySignTransaction([signer.keyPair], decoded);
   const signedTransaction = getBase64EncodedWireTransaction(signed);
+  await onEvent('signing', { wallet: signer.address ?? null });
 
-  if (order.submit?.method === 'rpc_send_transaction' || !order.requestId) {
+  const method = order.submit?.method ?? (order.requestId ? 'jupiter_ultra_execute' : null);
+
+  if (method === 'jito_bundle') {
+    // Only this path on the API we called: a response must not be able to send signed bytes elsewhere.
+    const path = String(order.submit?.path ?? '');
+    if (path !== BUNDLE_SUBMIT_PATH) {
+      return { ok: false, status: 'Refused', signature: null, error: `jito_bundle submit.path "${path}" is not the ZendIQ bundle endpoint` };
+    }
+    await onEvent('executing', { submitMethod: method });
+    const res = await fetch(new URL(path, apiBaseUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signedTransaction }),
+    });
+    let body = await res.json().catch(() => ({}));
+    // pending/unknown is not a verdict: keep asking the endpoint until the chain answers.
+    const deadline = Date.now() + bundlePollMs;
+    let reported = null;
+    while (res.ok && (body.state === 'pending' || body.state === 'unknown') && body.signature && Date.now() < deadline) {
+      if (body.state !== reported) { reported = body.state; await onEvent('bundle_status', { state: body.state, bundleId: body.bundleId ?? null }); }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const poll = await fetch(new URL(`${path}/${body.signature}`, apiBaseUrl)).catch(() => null);
+      const next = poll?.ok ? await poll.json().catch(() => null) : null;
+      if (next?.state) body = { ...body, ...next };
+    }
+    return {
+      ok: res.ok && body.state === 'landed',
+      status: body.state ?? body.error ?? `http_${res.status}`,
+      signature: body.signature ?? null,
+      bundleId: body.bundleId ?? null,
+      slot: body.slot ?? null,
+      error: res.ok ? (body.state === 'landed' ? null : body.note ?? null) : body.message ?? null,
+    };
+  }
+
+  if (method === 'rpc_send_transaction') {
+    await onEvent('executing', { submitMethod: method });
     const res = await fetch(rpcUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -436,6 +492,13 @@ async function signAndExecute({
     return { ok: confirmed.ok, status: confirmed.status, signature, error: confirmed.error };
   }
 
+  // Guessing a route for an unrecognised method could broadcast a transaction somewhere
+  // its protections do not hold, so an unknown one is refused before anything is sent.
+  if (method !== 'jupiter_ultra_execute') {
+    return { ok: false, status: 'Refused', signature: null, error: `unsupported submit.method "${method}" — update the client` };
+  }
+
+  await onEvent('executing', { submitMethod: method });
   const res = await fetch(executeUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },

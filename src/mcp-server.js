@@ -215,6 +215,16 @@ const TOOL_OPTIMIZE = {
         maximum: 10_000,
         description: 'Optional slippage tolerance in basis points. Omit to use the route default.',
       },
+      method: {
+        type: 'string',
+        enum: ['jito'],
+        description:
+          'Optional. "jito" forces a Jito bundle venue (raydium_jito or jupiter_swap_jito) even where '
+          + 'risk scoring would not bundle. Only bundle venues are considered, ranked by net value after '
+          + 'the tip, and no unbundled route is substituted if none builds. The returned plan.choice is '
+          + 'then "forced": your choice, not a risk decision. Submit the signed bundle to '
+          + 'POST /v1/agent/bundle. Omit to let risk scoring choose.',
+      },
     },
     required: ['inputMint', 'outputMint', 'amount', 'taker'],
     additionalProperties: false,
@@ -232,6 +242,7 @@ const TOOL_OPTIMIZE = {
         properties: {
           venue: { type: 'string' },
           bundle: { type: 'boolean' },
+          choice: { type: 'string', enum: ['selected', 'forced'] },
           jitoTipLamports: { type: ['integer', 'null'] },
           slippageBps: { type: ['integer', 'null'] },
         },
@@ -361,7 +372,7 @@ async function callPaid(url, body) {
 
   const parsed = await paid.json().catch(() => null);
   if (paid.status === 402) {
-    throw new Error(parsed?.message ?? 'Payment was rejected. Check the paying wallet holds USDC on this network.');
+    throw new Error(paidFailureMessage(paid.headers.get('PAYMENT-RESPONSE'), parsed));
   }
   if (!paid.ok) {
     await emitDemoEvent('call_failed', { status: paid.status });
@@ -391,6 +402,30 @@ async function callPaid(url, body) {
     latencyMs: Date.now() - startedAt,
   });
   return parsed;
+}
+
+/**
+ * Explain a 402 that answered a paid request. Only the settlement reason says whether money moved.
+ *
+ * @param {string|null} header - PAYMENT-RESPONSE header, base64 JSON.
+ * @param {object|null} parsed - Response body.
+ * @returns {string} Message for the agent.
+ */
+function paidFailureMessage(header, parsed) {
+  let settle = null;
+  try {
+    if (header) settle = JSON.parse(Buffer.from(header, 'base64').toString('utf8'));
+  } catch (_) { /* header shape is the facilitator's, not ours */ }
+  const reason = settle?.errorReason ?? null;
+  if (reason === 'settlement_pending') {
+    return 'Settlement could not be confirmed within 90 s, so this payment MAY have been charged. '
+      + `Check transaction ${settle.transaction || '(not reported)'} on chain before calling again.`;
+  }
+  if (reason === 'settlement_failed_on_chain' || reason === 'settlement_not_landed') {
+    return `Payment did not settle (${reason}) and nothing was charged. Calling again signs a fresh authorization.`;
+  }
+  return parsed?.message
+    ?? `Payment was rejected${reason ? ` (${reason})` : ''}. Check the paying wallet holds USDC on this network.`;
 }
 
 /**
@@ -458,6 +493,10 @@ function buildOptimizeRequest(args) {
     throw new Error('taker must be a base58 Solana public key — the mainnet wallet the swap is built for.');
   }
   body.taker = taker;
+  if (args?.method !== undefined && args?.method !== null) {
+    if (args.method !== 'jito') throw new Error('method must be "jito" to force a Jito bundle, or omitted to let risk scoring choose.');
+    body.method = 'jito';
+  }
   return body;
 }
 
@@ -565,4 +604,4 @@ function start() {
 
 if (require.main === module) start();
 
-module.exports = { project, buildRequest, handle, start, emitDemoEvent, parseKeypairBytes };
+module.exports = { project, buildRequest, buildOptimizeRequest, paidFailureMessage, handle, start, emitDemoEvent, parseKeypairBytes };
