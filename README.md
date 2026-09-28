@@ -130,7 +130,7 @@ The full risk breakdown (token-risk factors, sandwich exposure, provenance finge
 | `slippageBps` | integer | no | Slippage tolerance in basis points; omit for the route default |
 | `method` | `"jito"` | no | Force a Jito bundle venue even where risk scoring would not bundle. `plan.choice` is then `forced`; no unbundled route is substituted if none builds. Submit the signed bundle to `POST /v1/agent/bundle` |
 
-This tool returns token risk and sandwich exposure, but **not** the `verdict` — it assumes the decision has been taken. Call `zendiq_triage_swap` if you still need the verdict. Each call costs `$0.02` in USDC; a build that fails charges nothing.
+This tool also returns the Safe / Protect / Refuse `verdict` and its `reasons`, the same as `zendiq_triage_swap`, but it builds the transaction even on a Refuse, because it assumes the decision to trade has been taken. Read `verdict` before signing. Each call costs `$0.02` in USDC; a build that fails charges nothing.
 
 Note the network split: payment settles in **devnet** USDC, while the swap is routed against **mainnet** liquidity, so `taker` must be a mainnet wallet. Those are two different wallets today.
 
@@ -195,7 +195,9 @@ $env:ZENDIQ_TAKER_KEYPAIR = 'C:\path\to\mainnet-keypair.json'
 npm run optimize -- --taker <YOUR_MAINNET_PUBKEY> --execute
 ```
 
-The swap routes on **mainnet** (Jupiter has no devnet), so `--taker` must be a wallet that holds the input amount and SOL for fees and rent; the x402 payment stays on devnet USDC. By default the example **stops at simulation and spends nothing on-chain** — pass `--execute` (with `ZENDIQ_TAKER_KEYPAIR`) to sign and land a real swap. On `jupiter_ultra` the example submits through Jupiter's `/execute`; on `jupiter_swap` it sends through `SOLANA_RPC_URL`, which defaults to the public mainnet RPC. The response carries the unsigned `transaction`, the `plan`, the `submit` instructions for the chosen venue, the `simulation` result, and the `netBenefit` breakdown — everything needed to confirm the transaction matches the stated intent before signing.
+The swap routes on **mainnet** (Jupiter has no devnet), so `--taker` must be a wallet that holds the input amount and SOL for fees and rent; the x402 payment stays on devnet USDC. By default the example **stops at simulation and spends nothing on-chain** — pass `--execute` (with `ZENDIQ_TAKER_KEYPAIR`) to sign and land a real swap. On `jupiter_ultra` the example submits through Jupiter's `/execute`; on `jupiter_swap` it sends through `SOLANA_RPC_URL`, which defaults to the public mainnet RPC; on a Jito bundle venue it posts the signed transaction to ZendIQ's `/v1/agent/bundle` and polls until it lands. The response carries the unsigned `transaction`, the `plan`, the `submit` instructions for the chosen venue, the `simulation` result, and the `netBenefit` breakdown — everything needed to confirm the transaction matches the stated intent before signing.
+
+The example also prints the verdict and the venue decision. The venue decision lists every candidate with its net value, priority fee, Jito tip, modelled sandwich cost and bundle landing risk, the margin it had to beat, and why the winner won. It is `plan.venueDecision` from the response, so an agent can check the choice rather than trust it. With `--execute` the example will not sign a trade whose `verdict` is `Refuse`, just as it will not sign one whose simulation failed; pass `--sign-refused` to override it.
 
 ## Demo visualizer
 

@@ -44,6 +44,26 @@ const SWAP = {
   slippageBps: Number(valueFor('--slippage', '100')),
 };
 
+/**
+ * Print the cross-venue comparison behind plan.venue, so the choice can be checked rather than trusted.
+ *
+ * @param {object|undefined} d - plan.venueDecision.
+ */
+function printVenueDecision(d) {
+  if (!d?.candidates?.length) return;
+  const usd = (v) => (typeof v === 'number' ? `$${v.toFixed(6)}` : '—');
+  const margin = typeof d.marginUsd === 'number' ? `margin $${d.marginUsd.toFixed(6)}` : 'no margin (ranked)';
+  console.log(`  decision     ${d.basis} · chosen ${d.chosen ?? '—'} · ${margin}`);
+  console.log(`    ${'candidate'.padEnd(18)} ${'status'.padEnd(12)} ${'net'.padStart(10)} ${'fee'.padStart(10)} ${'tip'.padStart(10)} ${'sandwich'.padStart(10)} ${'landing'.padStart(10)}`);
+  for (const c of d.candidates) {
+    const mark = c.venue === d.baseline ? ' (baseline)' : '';
+    console.log(`    ${c.venue.padEnd(18)} ${String(c.status).padEnd(12)} ${usd(c.netUsd).padStart(10)} ${usd(c.priorityFeeUsd).padStart(10)} ${usd(c.tipUsd).padStart(10)} ${usd(c.expectedMevLossUsd).padStart(10)} ${usd(c.landingRiskUsd).padStart(10)}${mark}`);
+    const why = c.reason ?? c.error ?? c.buildError;
+    if (why) console.log(`      ${why}`);
+  }
+  if (d.note) console.log(`    ${d.note}`);
+}
+
 (async () => {
   let budget;
   try {
@@ -79,11 +99,14 @@ const SWAP = {
 
   const o = result.order;
   console.log(`  ${result.status}  paid $${result.paidUsd.toFixed(4)}${result.replayed ? ' (replayed)' : ''}`);
-  console.log(`\n  venue        ${o.plan?.venueLabel ?? o.plan?.venue}`);
+  console.log(`\n  verdict      ${o.verdict ?? '—'}${o.confidence ? ` (${o.confidence} confidence)` : ''}`);
+  for (const reason of (o.reasons ?? []).slice(0, 3)) console.log(`    ${reason}`);
+  console.log(`  venue        ${o.plan?.venueLabel ?? o.plan?.venue}`);
   if (o.plan?.override) {
     const forced = o.plan.override.forcedVenue ?? `method ${o.plan.override.method} -> ${o.plan.venue}`;
     console.log(`  OVERRIDE     forced ${forced} — risk would have used ${o.plan.override.riskVenue}`);
   }
+  printVenueDecision(o.plan?.venueDecision);
   // plan.priorityFee.control says what requestedLamports means, so the figure is never
   // printed without the qualifier that makes it true.
   const pf = o.plan?.priorityFee;
@@ -132,6 +155,15 @@ const SWAP = {
     if (sim.err) console.error(`  error        ${JSON.stringify(sim.err)}`);
     if (sim.logs?.length) for (const l of sim.logs) console.error(`  log          ${l}`);
     console.error('  Re-run to simulate again, or pass --force-unsimulated to sign without verification.');
+    console.error(`\n  ${budget.banner()}\n`);
+    process.exit(1);
+  }
+
+  // A Refuse verdict means ZendIQ would not trade this; the build is returned because the caller may disagree.
+  if (o.verdict === 'Refuse' && !args.includes('--sign-refused')) {
+    console.error('\n  Refusing to sign — ZendIQ\'s verdict for this trade is Refuse:');
+    for (const reason of (o.reasons ?? [])) console.error(`    ${reason}`);
+    console.error('  Pass --sign-refused to sign it anyway.');
     console.error(`\n  ${budget.banner()}\n`);
     process.exit(1);
   }

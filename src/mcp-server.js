@@ -178,9 +178,10 @@ const TOOL_OPTIMIZE = {
     + 'with your own wallet. A build that fails charges nothing. Each successful call costs '
     + '$0.02 in USDC, paid automatically via x402. '
     + 'Use this when the decision to trade is already made and the open question is how to '
-    + 'execute it well. If the open question is still whether to trade at all, use '
-    + 'zendiq_triage_swap instead: this tool returns token risk and sandwich exposure scores '
-    + 'but NOT the Safe / Protect / Refuse verdict. '
+    + 'execute it well. It also returns the Safe / Protect / Refuse verdict with its reasons, and '
+    + 'still builds the transaction on a Refuse: read `verdict` before signing, and do not sign a '
+    + 'Refuse unless you mean to trade against ZendIQ\'s verdict. If the open question is still '
+    + 'whether to trade at all, zendiq_triage_swap answers it for $0.01 without building anything. '
     + 'NETWORK: the API is in its testing phase, so payment settles in DEVNET USDC (free test '
     + 'money) from the paying wallet; an agent funded only on mainnet cannot pay for this call '
     + 'yet. At launch payment moves to mainnet USDC. The swap itself is always built against '
@@ -236,6 +237,12 @@ const TOOL_OPTIMIZE = {
         type: 'string',
         description: 'Unsigned base64 VersionedTransaction. Verify it against `plan` before signing.',
       },
+      verdict: {
+        type: ['string', 'null'],
+        enum: ['Safe', 'Protect', 'Refuse', null],
+        description: 'The same verdict zendiq_triage_swap gives. The transaction is built even on Refuse; do not sign it unless you mean to trade against the verdict.',
+      },
+      reasons: { type: 'array', items: { type: 'string' } },
       plan: {
         type: 'object',
         description: 'The structured intent the transaction bytes should match.',
