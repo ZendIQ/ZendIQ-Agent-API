@@ -623,7 +623,7 @@
                 "properties": {
                   "venue": {
                     "type": "string",
-                    "description": "jupiter_ultra or jupiter_swap under risk-based selection; raydium when its direct quote beats that Jupiter route after costs; raydium_jito or jupiter_swap_jito (a Jito bundle) when sandwich exposure drives the verdict and the bundle beats the Jupiter route after its tip, or when the request sent method: jito (see venueDecision and choice). Other venue names appear only when a venue was forced through the authenticated debug override, in which case `override` is non-null. Treat unrecognised values as unknown, not as an error.",
+                    "description": "jupiter_ultra or jupiter_swap under risk-based selection; raydium when the verdict is Safe and its direct quote beats that Jupiter route after costs; raydium_jito or jupiter_swap_jito (a Jito bundle) on any verdict when the bundle beats the Jupiter route after its tip and landing risk, or when the request sent method: jito (see venueDecision and choice). Other venue names appear only when a venue was forced through the authenticated debug override, in which case `override` is non-null. Treat unrecognised values as unknown, not as an error.",
                     "examples": ["jupiter_ultra", "jupiter_swap", "raydium", "raydium_jito", "jupiter_swap_jito"]
                   },
                   "choice": {
@@ -638,13 +638,13 @@
                   },
                   "venueDecision": {
                     "type": "object",
-                    "description": "Experimental. The cross-venue comparison behind `venue`. netUsd = outUsd + unspentInputUsd − priorityFeeUsd − tipUsd − expectedMevLossUsd, per candidate. A direct venue wins only when it beats the Jupiter baseline by more than marginUsd; Jupiter wins ties and anything unpriced.",
+                    "description": "Experimental. The cross-venue comparison behind `venue`. netUsd = outUsd + unspentInputUsd − priorityFeeUsd − tipUsd − expectedMevLossUsd − landingRiskUsd, per candidate. A direct venue wins only when it beats the Jupiter baseline by more than marginUsd; Jupiter wins ties and anything unpriced. Unprotected raydium competes only on a Safe verdict. Jito bundle venues compete on every verdict, except that on Safe they step aside while ZendIQ's shared Jito submission budget is more than half used.",
                     "properties": {
                       "evaluated": { "type": "boolean" },
                       "basis": { "type": "string", "enum": ["net_benefit", "unavailable_no_usd_rates", "unavailable_baseline_unpriced", "not_evaluated_venue_forced", "forced_method_ranked", "forced_method_unpriced"], "description": "forced_method_* = method: jito; bundle venues were ranked against each other only, with no baseline." },
                       "baseline": { "type": ["string", "null"], "description": "The Jupiter venue risk scoring selected. Null under method: jito." },
                       "chosen": { "type": "string", "description": "The ranking's winner. If it could not be built, `plan.venue` differs and `plan.venueFallback` says why." },
-                      "marginUsd": { "type": "number", "description": "The larger of $0.005 and 0.1% of the trade." },
+                      "marginUsd": { "type": "number", "description": "0.1% of the trade, capped at $1. The share absorbs quote-to-fill noise, which grows with trade size; past $1 a gap between venues is a real price difference. No fixed dollar floor." },
                       "advantageUsd": { "type": ["number", "null"], "description": "Winner's netUsd minus the baseline's; null when the baseline was kept." },
                       "candidates": {
                         "type": "array",
@@ -663,6 +663,7 @@
                             "priorityFeeUsd": { "type": "number" },
                             "tipUsd": { "type": "number" },
                             "expectedMevLossUsd": { "type": "number", "description": "The modelled sandwich cost (sandwichExposure.estimatedLossUsd), charged only to routes exposed to the public mempool. An estimate, not a measurement." },
+                            "landingRiskUsd": { "type": "number", "description": "Charged only to Jito bundle venues: an assumed 5% not-landed rate times the /optimize fee, the cost of rebuilding after a bundle that does not land. Nothing moves when a bundle does not land." },
                             "netUsd": { "type": ["number", "null"] }
                           }
                         }
