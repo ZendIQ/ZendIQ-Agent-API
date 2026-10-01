@@ -74,7 +74,7 @@ function printVenueDecision(d) {
     process.exit(1);
   }
 
-  const { signer, address } = await loadAgentSigner({ network: NETWORK });
+  const { signer, address } = await loadAgentSigner({ network: NETWORK, ledger: budget });
   const taker = valueFor('--taker', address);
 
   console.log(`\nZendIQ agent  ${NETWORK}`);
@@ -173,7 +173,7 @@ function printVenueDecision(d) {
     console.error('\n  --execute requires ZENDIQ_TAKER_KEYPAIR (the taker wallet keypair file).\n');
     process.exit(1);
   }
-  const takerSigner = await loadAgentSigner({ network: 'mainnet', file: takerKeyFile });
+  const takerSigner = await loadAgentSigner({ network: 'mainnet', role: 'taker', file: takerKeyFile });
   if (takerSigner.address !== taker) {
     console.error(`\n  ZENDIQ_TAKER_KEYPAIR (${takerSigner.address}) does not match --taker (${taker}).\n`);
     process.exit(1);

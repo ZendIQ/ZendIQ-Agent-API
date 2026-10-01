@@ -26,7 +26,9 @@ const SWAP = {
 const METHOD = valueFor('--method', null);
 const STATE_DIR = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
 const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(STATE_DIR, `budget-${NETWORK}.json`);
-const KEY_FILE = process.env.ZENDIQ_AGENT_KEYPAIR ?? path.join(STATE_DIR, `agent-${NETWORK}.key.json`);
+// Mainnet pays only with loadAgentSigner's own payer-mainnet.key.json, never a path from the environment.
+const KEY_FILE = NETWORK === 'mainnet' ? undefined
+  : (process.env.ZENDIQ_AGENT_KEYPAIR ?? path.join(STATE_DIR, `agent-${NETWORK}.key.json`));
 
 async function emit(type, transport, data) {
   const response = await fetch(EVENT_URL, {
@@ -44,10 +46,12 @@ async function preflight() {
   if (!manifest.ok) throw new Error(`Agent API preflight failed: HTTP ${manifest.status}`);
   if (!visualizer.ok) throw new Error(`Visualizer preflight failed: HTTP ${visualizer.status}`);
   if (!require('node:fs').existsSync(BUDGET_FILE)) {
+    // A mainnet ceiling is a spending decision; it is never created as a side effect of a demo run.
+    if (NETWORK === 'mainnet') throw new Error(`no mainnet budget ledger at ${BUDGET_FILE}. Create it with: AGENT_NETWORK=mainnet node examples/budget.js init <ceilingUsd>`);
     BudgetLedger.init(BUDGET_FILE, 1.00, NETWORK);
   }
-  BudgetLedger.load(BUDGET_FILE, NETWORK);
-  await loadAgentSigner({ network: NETWORK, file: KEY_FILE });
+  const ledger = BudgetLedger.load(BUDGET_FILE, NETWORK);
+  await loadAgentSigner({ network: NETWORK, file: KEY_FILE, stateDir: STATE_DIR, ledger });
   console.log(`Preflight passed: ${BASE_URL} · ${NETWORK} · visualizer connected`);
 }
 
@@ -58,7 +62,9 @@ function callMcp() {
         ...process.env,
         ZENDIQ_AGENT_URL: BASE_URL,
         ZENDIQ_AGENT_NETWORK: NETWORK,
-        ZENDIQ_AGENT_KEYPAIR: KEY_FILE,
+        ZENDIQ_AGENT_BUDGET_FILE: BUDGET_FILE,
+        AGENT_STATE_DIR: STATE_DIR,
+        ...(KEY_FILE ? { ZENDIQ_AGENT_KEYPAIR: KEY_FILE } : {}),
         ZENDIQ_DEMO_EVENTS_URL: EVENT_URL,
       },
       stdio: ['pipe', 'pipe', 'inherit'],
@@ -91,7 +97,7 @@ async function main() {
 
   const mcpResult = await callMcp();
   const budget = BudgetLedger.load(BUDGET_FILE, NETWORK);
-  const { signer } = await loadAgentSigner({ network: NETWORK, file: KEY_FILE });
+  const { signer } = await loadAgentSigner({ network: NETWORK, file: KEY_FILE, stateDir: STATE_DIR, ledger: budget });
   let eventQueue = Promise.resolve();
   const client = new ZendIQClient({
     signer, budget, baseUrl: BASE_URL, network: NETWORK, rpcUrl: RPC_URL,
@@ -151,7 +157,7 @@ async function main() {
       process.exitCode = 2;
       return;
     }
-    const taker = await loadAgentSigner({ network: 'mainnet', file: takerKeyFile });
+    const taker = await loadAgentSigner({ network: 'mainnet', role: 'taker', file: takerKeyFile, stateDir: STATE_DIR });
     // A bundle is posted back to the API that built it, never to a default host.
     const exec = await signAndExecute({
       order: optimizeResult.order, signer: taker.signer, apiBaseUrl: BASE_URL,

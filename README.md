@@ -157,8 +157,11 @@ Register it in your MCP client's config (paths must be absolute):
 | Env | Default | Purpose |
 |---|---|---|
 | `ZENDIQ_AGENT_URL` | `https://zendiq-backend.onrender.com` | API base URL. **The default is ZendIQ's live service** — see [Where your calls go](#where-your-calls-go) |
-| `ZENDIQ_AGENT_KEYPAIR` | — | Solana keypair JSON that holds USDC; signs x402 payments only |
+| `ZENDIQ_AGENT_KEYPAIR` | — | **Devnet only.** Solana keypair JSON that holds USDC; signs x402 payments only. Refused on mainnet |
 | `ZENDIQ_AGENT_NETWORK` | `devnet` | Payment rail: `devnet` or `mainnet`. The hosted API settles in devnet USDC today |
+| `ZENDIQ_AGENT_BUDGET_FILE` | — | Budget ledger every payment is reserved against. **Required on mainnet**, optional on devnet. See [What the budget ceiling guarantees](#what-the-budget-ceiling-guarantees) |
+
+On mainnet the MCP server takes its paying key the same way the examples do, from `runtime/payer-mainnet.key.json` (or `AGENT_STATE_DIR`, or `AGENT_SECRET_SEED`), and only together with a mainnet ledger.
 
 Diagnostics go to stderr so stdout stays a clean JSON-RPC transport. Transport is stdio only — the standard local MCP transport every client supports; a remote/HTTP transport is not currently provided.
 
@@ -182,6 +185,32 @@ npm run watch
 `watch` begins with USDC as a control, so a run proves that the agent discriminates rather than refusing everything. It then prints a run ledger containing triage spend, refused candidates, protected candidates, and candidates cleared for direct routing.
 
 The autonomous agent is advisory — it reports the recommended path and fees without claiming that money moved. To build and submit a real optimized swap, see **Execution** below. Keys and budget ledgers live under the gitignored `runtime/` directory.
+
+## What the budget ceiling guarantees
+
+The ledger (`examples/budget.js`) is a hard ceiling on what the paying wallet spends on ZendIQ calls. It holds under these conditions, and only these:
+
+- **What it counts.** Every x402 payment made through `ZendIQClient`: the examples, the demo runner, and the MCP server, which all share that one payment path. Each payment is reserved before it is signed and resolved afterwards. An outcome that might have been charged is counted as spent, so the ceiling over-counts rather than under-counts.
+- **On mainnet the paying key is fenced.**
+  - It is loaded only by `loadAgentSigner`, from its own file, `runtime/payer-mainnet.key.json`, and only with a mainnet ledger attached; without one it throws.
+  - A ledger records the one key that pays against it, and a key is bound to one ledger.
+  - The wallet a swap is built for (`--taker`, `ZENDIQ_TAKER_KEYPAIR`) is a separate key, and it is refused if it is the payer.
+- **More than one process may share a ledger.** Every change takes a lockfile (`<ledger>.lock`, holding the owner's PID) and re-reads the file, so two processes cannot both reserve the same remaining budget.
+- **A crashed process does not wedge the ledger.** If the lock holder is killed mid-operation, the next spender sees that its PID is gone and takes the lock over at once. If the holder is still alive, the spender waits up to 5 s and then **refuses to pay**. The error names the PID and the lockfile; it never hangs. A lock older than 30 s is taken over regardless. **Manual recovery:** stop every agent using that ledger, then delete `<ledger>.lock`.
+- **What it cannot see:**
+  - Anything signed with the paying key outside this code, for example a script that reads the key file itself.
+  - The funding transfer into the paying wallet, and any later top-ups.
+  - Network fees and token-account rent. The facilitator pays the payment's network fee, so in normal use the paying wallet spends USDC only.
+  - Swaps, which the taker signs and pays for, from a different wallet.
+
+**What "exact reconciliation" means.** Compare two lists for one paying address: every **USDC transfer out of that address** on chain, and every ledger entry in state `settled`, **matched by transaction signature** (the entry's `note`, which holds the settlement signature from the server's `PAYMENT-RESPONSE`). For a key used only through this code they match one to one. The single expected exception is a `settled` entry noted `unconfirmed_settlement_may_have_landed`, which may have no transfer, because the ledger counts a payment it cannot rule out. Inflows (funding, top-ups) are not ledger entries and are not part of the comparison. Any outflow with no matching entry means the key was used outside the ledger.
+
+**Reconciling a fresh key**
+
+1. Generate the key and fund it with USDC. Record the funding transaction's signature; it is the only expected inflow.
+2. Create a **new** ledger for it (`AGENT_NETWORK=mainnet node examples/budget.js init <ceilingUsd>`). Never point a new key at a ledger that already has entries: its history belongs to another key and can never reconcile. `init` refuses to overwrite an existing file, so move an old one aside first.
+3. Make paid calls only through this code. The first load binds the key to the ledger (`payer` in the ledger, `runtime/payer-bindings.json`).
+4. List the paying address's USDC token-account history on chain. Drop the funding transfer and any top-ups. The remaining outflows' signatures must equal the `note` signatures of the ledger's `settled` entries, and their amounts must equal each entry's `atomic` (USDC, 6 decimals).
 
 ## Execution — build a signable swap (`/optimize`)
 

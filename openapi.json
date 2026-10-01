@@ -65,6 +65,7 @@
             }
           },
           "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "422": { "$ref": "#/components/responses/NotAMint" },
           "429": { "$ref": "#/components/responses/ScreenRateLimited" },
           "500": { "$ref": "#/components/responses/InternalError" },
           "502": { "$ref": "#/components/responses/AnalysisUnavailable" }
@@ -97,6 +98,7 @@
           "400": { "$ref": "#/components/responses/InvalidRequest" },
           "402": { "$ref": "#/components/responses/PaymentRequired" },
           "409": { "$ref": "#/components/responses/AuthorizationAlreadyUsed" },
+          "422": { "$ref": "#/components/responses/NotAMint" },
           "429": { "$ref": "#/components/responses/RateLimited" },
           "500": { "$ref": "#/components/responses/InternalError" },
           "502": { "$ref": "#/components/responses/AnalysisUnavailable" }
@@ -227,7 +229,7 @@
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
       "PaymentRequired": {
-        "description": "Payment required. Sign an authorization for exactly the amount in the PAYMENT-REQUIRED header and retry the identical request with a PAYMENT-SIGNATURE header (X-PAYMENT is accepted as an alias; a bare PAYMENT header is not read). This is the normal first response to a paid endpoint, not an error. A 402 in reply to a paid attempt instead carries a PAYMENT-RESPONSE header: its `errorReason` `settlement_failed_on_chain` or `settlement_not_landed` means the transfer did not move and you were not charged; `settlement_pending` means it could not be confirmed within 90 s and may have landed: keep the PAYMENT-SIGNATURE header and retry once with the same header after about 5 s. If the transfer landed, that retry is redeemed for one fresh response on the same route within 24 h, and its PAYMENT-RESPONSE carries `redeemed: true`. Do not sign a new authorization.",
+        "description": "Payment required. Sign an authorization for exactly the amount in the PAYMENT-REQUIRED header and retry the identical request with a PAYMENT-SIGNATURE header (X-PAYMENT is accepted as an alias; a bare PAYMENT header is not read). This is the normal first response to a valid request on a paid endpoint, not an error. Requests are validated before the challenge: a malformed body is 400 `invalid_request`, an address that is not a token mint is 422 `not_a_mint`, and on /optimize a `taker` that does not hold the input amount is 422 `taker_insufficient_balance`, all without a 402, so you never sign a payment for a request that cannot be served. A 402 in reply to a paid attempt instead carries a PAYMENT-RESPONSE header: its `errorReason` `settlement_failed_on_chain` or `settlement_not_landed` means the transfer did not move and you were not charged; `settlement_pending` means it could not be confirmed within 90 s and may have landed: keep the PAYMENT-SIGNATURE header and retry once with the same header after about 5 s. If the transfer landed, that retry is redeemed for one fresh response on the same route within 24 h, and its PAYMENT-RESPONSE carries `redeemed: true`. Do not sign a new authorization.",
         "headers": {
           "PAYMENT-REQUIRED": { "$ref": "#/components/headers/PaymentRequired" },
           "PAYMENT-RESPONSE": { "$ref": "#/components/headers/PaymentResponse" }
@@ -252,7 +254,11 @@
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
       "TakerInsufficientBalance": {
-        "description": "Error code `taker_insufficient_balance`. No transaction is returned, and you were not charged. The `taker` cannot fund the trade: `need` is `input_token` when it does not hold the input amount (checked before anything is quoted or built), or `sol_for_fees` when it cannot pay for the transaction it would sign (base fee, priority fee and Jito tip in the bytes, plus rent for token accounts the swap opens). A transaction whose fee payer is not the taker (a gasless Ultra fill) is exempt, and another venue that can fill gaslessly is tried before refusing. The body names the token, the amount required and held, and the shortfall. Balances are read from the taker's associated token accounts. SOL requirements are lower bounds, and when the balances cannot be read the check is skipped and the build proceeds.",
+        "description": "Error code `taker_insufficient_balance` or `not_a_mint`; you were not charged for either. `not_a_mint`: `inputMint` or `outputMint` is not a token mint (see the NotAMint response). `taker_insufficient_balance`: No transaction is returned, and you were not charged. The `taker` cannot fund the trade: `need` is `input_token` when it does not hold the input amount (checked before anything is quoted or built), or `sol_for_fees` when it cannot pay for the transaction it would sign (base fee, priority fee and Jito tip in the bytes, plus rent for token accounts the swap opens). A transaction whose fee payer is not the taker (a gasless Ultra fill) is exempt, and another venue that can fill gaslessly is tried before refusing. The body names the token, the amount required and held, and the shortfall. Balances are read from the taker's associated token accounts. SOL requirements are lower bounds, and when the balances cannot be read the check is skipped and the build proceeds.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "NotAMint": {
+        "description": "Error code `not_a_mint`. The address in `field` (`mint`, `inputMint` or `outputMint`) is not an SPL Token or Token-2022 mint, so no score is produced and no `analysisId` is issued. `reason` is `account_not_found` (no account exists at the address; usually a typo, or a mint created seconds ago, so retry shortly) or `not_a_mint_account` (an account exists but is not a mint, such as a wallet or token account; `owner` names its program). Checked before the 402 challenge, so you never sign a payment for it, and never charged.",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
       "OptimizeUnavailable": {

@@ -17,6 +17,10 @@
  * The ledger must be created explicitly. A missing file is an error, never an empty
  * budget: "has not spent anything yet" and "spent it all, then lost the ledger" are
  * indistinguishable from the file's absence, and only one of them is safe to assume.
+ *
+ * More than one process may spend against a ledger (the demo runner spawns the MCP server),
+ * so every change takes a lockfile and re-reads the file first. Without that, two processes
+ * would each reserve against the same remaining budget (OPS-304).
  */
 
 const fs = require('node:fs');
@@ -25,9 +29,23 @@ const crypto = require('node:crypto');
 
 /** Guards against float drift accumulating across many small USDC charges. */
 const CENTS = 1e6;
+// A lock held this long belongs to a process that died mid-write; every operation is milliseconds.
+const LOCK_STALE_MS = 30_000;
+const LOCK_WAIT_MS = 5_000;
 
 const toAtomic = (usd) => Math.round(usd * CENTS);
 const toUsd = (atomic) => atomic / CENTS;
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/** @returns {boolean} False only when the PID provably does not exist; EPERM means it does. */
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
 
 class BudgetExceededError extends Error {
   constructor(message) {
@@ -81,6 +99,15 @@ class BudgetLedger {
    * @returns {BudgetLedger} The loaded ledger.
    */
   static load(file, expectNetwork = null) {
+    return new BudgetLedger(file, BudgetLedger._read(file, expectNetwork));
+  }
+
+  /**
+   * @param {string} file - Ledger path.
+   * @param {string|null} expectNetwork - Refuse a ledger for another network.
+   * @returns {object} Validated ledger state.
+   */
+  static _read(file, expectNetwork) {
     if (!fs.existsSync(file)) {
       throw new Error(
         `no budget ledger at ${file}. Create one explicitly with BudgetLedger.init() — `
@@ -97,7 +124,74 @@ class BudgetLedger {
     if (expectNetwork && state.network !== expectNetwork) {
       throw new Error(`ledger is for network "${state.network}", but this run is "${expectNetwork}"`);
     }
-    return new BudgetLedger(file, state);
+    // Amounts are integer atomic units on disk; anything else would be summed as a float and misread.
+    const bad = (state.entries ?? []).find((e) => !Number.isSafeInteger(e?.atomic) || e.atomic <= 0
+      || !['pending', 'settled', 'released'].includes(e?.state));
+    if (!Array.isArray(state.entries) || bad) {
+      throw new Error(`ledger ${file} has an entry that is not a positive integer amount in a known state `
+        + `(${JSON.stringify(bad ?? state.entries).slice(0, 160)}). Refusing to read it rather than guess.`);
+    }
+    return state;
+  }
+
+  /**
+   * Run a change against the ledger as it is on disk now, under an exclusive lock.
+   *
+   * @param {Function} fn - Mutates `this.state`; its return value is passed through.
+   * @returns {*} What `fn` returned.
+   */
+  _withLock(fn) {
+    const lock = `${this.file}.lock`;
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    for (;;) {
+      try {
+        fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+        break;
+      } catch (err) {
+        if (err.code !== 'EEXIST') throw err;
+        let age = 0;
+        let holder = null;
+        try {
+          age = Date.now() - fs.statSync(lock).mtimeMs;
+          holder = Number.parseInt(fs.readFileSync(lock, 'utf8'), 10);
+        } catch (_) { continue; }
+        // A holder killed mid-operation never removes its lock; its PID being gone proves it.
+        if (age > LOCK_STALE_MS || (Number.isInteger(holder) && !processAlive(holder))) {
+          fs.rmSync(lock, { force: true });
+          continue;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(`budget ledger ${this.file} is locked by process ${holder ?? '(unknown)'} (${lock}). `
+            + 'Refusing to spend against a budget that may be changing. If no agent is running, '
+            + `delete ${lock}; it is also taken over automatically once ${LOCK_STALE_MS / 1000} s old.`);
+        }
+        sleepSync(20);
+      }
+    }
+    try {
+      this.state = BudgetLedger._read(this.file, this.state.network);
+      const out = fn();
+      this._write();
+      return out;
+    } finally {
+      fs.rmSync(lock, { force: true });
+    }
+  }
+
+  /**
+   * Tie this ledger to the one key that pays against it. A ledger shared by two keys could
+   * not be reconciled against either key's transfers.
+   *
+   * @param {string} address - Paying address.
+   */
+  bindPayer(address) {
+    if (this.state.payer === address) return;
+    this._withLock(() => {
+      if (this.state.payer && this.state.payer !== address) {
+        throw new Error(`ledger ${this.file} belongs to payer ${this.state.payer}, not ${address}`);
+      }
+      this.state.payer = address;
+    });
   }
 
   /** Rename is atomic, so a crash mid-write cannot leave a truncated ledger. */
@@ -114,10 +208,14 @@ class BudgetLedger {
 
   /** @returns {number} Settled plus still-pending spend, in USD. */
   get committedUsd() {
-    const atomic = this.state.entries
+    return toUsd(this._committedAtomic());
+  }
+
+  /** @returns {number} Settled plus still-pending spend, atomic. */
+  _committedAtomic() {
+    return this.state.entries
       .filter((e) => e.state === 'pending' || e.state === 'settled')
       .reduce((sum, e) => sum + e.atomic, 0);
-    return toUsd(atomic);
   }
 
   /** @returns {number} Confirmed spend only, in USD. */
@@ -130,7 +228,7 @@ class BudgetLedger {
 
   /** @returns {number} What is still available to reserve, in USD. */
   get remainingUsd() {
-    return toUsd(this.state.ceilingAtomic) - this.committedUsd;
+    return toUsd(this.state.ceilingAtomic - this._committedAtomic());
   }
 
   /**
@@ -144,23 +242,24 @@ class BudgetLedger {
   reserve(usd, meta = {}) {
     if (!Number.isFinite(usd) || usd <= 0) throw new Error('usd must be a positive number');
     const atomic = toAtomic(usd);
-    if (toUsd(atomic) > this.remainingUsd) {
-      throw new BudgetExceededError(
-        `budget ceiling reached: $${this.remainingUsd.toFixed(4)} remains of `
-        + `$${this.ceilingUsd.toFixed(2)}, cannot reserve $${usd.toFixed(4)}`,
-      );
-    }
-    const id = crypto.randomUUID();
-    this.state.entries.push({
-      id,
-      at: new Date().toISOString(),
-      atomic,
-      state: 'pending',
-      route: meta.route ?? null,
-      note: meta.note ?? null,
+    return this._withLock(() => {
+      if (atomic > this.state.ceilingAtomic - this._committedAtomic()) {
+        throw new BudgetExceededError(
+          `budget ceiling reached: $${this.remainingUsd.toFixed(4)} remains of `
+          + `$${this.ceilingUsd.toFixed(2)}, cannot reserve $${usd.toFixed(4)}`,
+        );
+      }
+      const id = crypto.randomUUID();
+      this.state.entries.push({
+        id,
+        at: new Date().toISOString(),
+        atomic,
+        state: 'pending',
+        route: meta.route ?? null,
+        note: meta.note ?? null,
+      });
+      return id;
     });
-    this._write();
-    return id;
   }
 
   /**
@@ -170,20 +269,21 @@ class BudgetLedger {
    * @param {object} [opts] - `usd` to correct the amount, `note` for the trail.
    */
   settle(id, opts = {}) {
-    const entry = this._pending(id);
-    if (opts.usd !== undefined) {
-      const atomic = toAtomic(opts.usd);
-      // Settling above the reservation can breach the ceiling, so it is recorded and
-      // reported rather than rejected — the money has already moved by this point.
-      if (atomic > entry.atomic && toUsd(atomic - entry.atomic) > this.remainingUsd) {
-        console.warn(`[budget] settled $${opts.usd} over a $${toUsd(entry.atomic)} reservation — ceiling breached`);
+    this._withLock(() => {
+      const entry = this._pending(id);
+      if (opts.usd !== undefined) {
+        const atomic = toAtomic(opts.usd);
+        // Settling above the reservation can breach the ceiling, so it is recorded and
+        // reported rather than rejected — the money has already moved by this point.
+        if (atomic > entry.atomic && toUsd(atomic - entry.atomic) > this.remainingUsd) {
+          console.warn(`[budget] settled $${opts.usd} over a $${toUsd(entry.atomic)} reservation — ceiling breached`);
+        }
+        entry.atomic = atomic;
       }
-      entry.atomic = atomic;
-    }
-    entry.state = 'settled';
-    entry.settledAt = new Date().toISOString();
-    if (opts.note) entry.note = opts.note;
-    this._write();
+      entry.state = 'settled';
+      entry.settledAt = new Date().toISOString();
+      if (opts.note) entry.note = opts.note;
+    });
   }
 
   /**
@@ -194,11 +294,12 @@ class BudgetLedger {
    * @param {string} [reason] - Why it was released.
    */
   release(id, reason = null) {
-    const entry = this._pending(id);
-    entry.state = 'released';
-    entry.releasedAt = new Date().toISOString();
-    if (reason) entry.note = reason;
-    this._write();
+    this._withLock(() => {
+      const entry = this._pending(id);
+      entry.state = 'released';
+      entry.releasedAt = new Date().toISOString();
+      if (reason) entry.note = reason;
+    });
   }
 
   /**

@@ -32,6 +32,9 @@ const USDC_DECIMALS = 6;
 /** ZendIQ's bundle submit endpoint (OPS-322); signed bundle transactions go nowhere else. */
 const BUNDLE_SUBMIT_PATH = '/v1/agent/bundle';
 
+/** Devnet only: a run with no ceiling still goes through the one payment path below. */
+const NO_LEDGER = Object.freeze({ reserve: () => null, settle() {}, release() {} });
+
 /**
  * @param {string|null} value - Base64 header value.
  * @returns {object|null} Decoded JSON, or null.
@@ -43,6 +46,14 @@ function decodeHeader(value) {
   } catch (_) {
     return null;
   }
+}
+
+/**
+ * @param {object} body - Error response body.
+ * @returns {string|undefined} `code: message`, so an actionable failure is not reduced to its code.
+ */
+function errorText(body) {
+  return body?.error && body?.message ? `${body.error}: ${body.message}` : (body?.error ?? body?.message);
 }
 
 /**
@@ -77,8 +88,14 @@ class ZendIQClient {
    */
   constructor(opts) {
     this.baseUrl = (opts.baseUrl ?? 'https://zendiq-backend.onrender.com').replace(/\/$/, '');
-    this.budget = opts.budget;
     this.network = opts.network ?? 'devnet';
+    if (!opts.budget && this.network === 'mainnet') {
+      throw new Error('a mainnet ZendIQClient needs a budget ledger: every payment must pass through the ceiling (OPS-304)');
+    }
+    if (opts.budget && opts.budget.state?.network && opts.budget.state.network !== this.network) {
+      throw new Error(`budget ledger is for ${opts.budget.state.network}, but this client pays on ${this.network}`);
+    }
+    this.budget = opts.budget ?? NO_LEDGER;
     this.headers = { ...(opts.headers ?? {}) };
     this.pendingRetryMs = opts.pendingRetryMs ?? 5000;
     this.onEvent = typeof opts.onEvent === 'function' ? opts.onEvent : () => {};
@@ -114,7 +131,7 @@ class ZendIQClient {
     const url = `${this.baseUrl}/v1/agent/analyse`;
     const send = (headers = {}) => fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...headers },
+      headers: { 'Content-Type': 'application/json', ...this.headers, ...headers },
       body: JSON.stringify(swap),
     });
 
@@ -125,7 +142,7 @@ class ZendIQClient {
         ok: challenge.ok,
         status: challenge.status,
         verdict: challenge.ok ? body : undefined,
-        error: challenge.ok ? undefined : (body.error ?? `unexpected ${challenge.status}`),
+        error: challenge.ok ? undefined : (errorText(body) ?? `unexpected ${challenge.status}`),
         paidUsd: 0,
         replayed: false,
       };
@@ -276,7 +293,7 @@ class ZendIQClient {
         ok: challenge.ok,
         status: challenge.status,
         order: challenge.ok ? body : undefined,
-        error: challenge.ok ? undefined : (body.error ?? `unexpected ${challenge.status}`),
+        error: challenge.ok ? undefined : (errorText(body) ?? `unexpected ${challenge.status}`),
         paidUsd: 0,
         replayed: false,
       };
@@ -370,7 +387,7 @@ class ZendIQClient {
 
     // `error` is the code and `message` the detail; reporting only the code turns an
     // actionable upstream failure into an opaque one-word string.
-    const bodyError = body.error && body.message ? `${body.error}: ${body.message}` : (body.error ?? body.message);
+    const bodyError = errorText(body);
 
     return {
       ok: response.ok,

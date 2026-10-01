@@ -39,3 +39,65 @@ test('run ledger excludes its control from candidate totals', () => {
   assert.equal(ledger.count('Refuse'), 1);
   assert.match(ledger.report(), /declined\s+1/);
 });
+
+// OPS-304: a mainnet payment the ledger cannot see is a spend the ceiling cannot stop.
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { loadAgentSigner, parseKeyFile } = require('./keys');
+const { BudgetLedger } = require('./budget');
+const { ZendIQClient } = require('./zendiq-client');
+
+function mainnetDir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zendiq-keys-'));
+  const seed = (b) => JSON.stringify({ seed: Array(32).fill(b) });
+  fs.writeFileSync(path.join(dir, 'payer-mainnet.key.json'), seed(7));
+  fs.writeFileSync(path.join(dir, 'taker.key.json'), seed(9));
+  return dir;
+}
+
+test('a mainnet payer is refused without a mainnet ledger', async () => {
+  const stateDir = mainnetDir();
+  await assert.rejects(loadAgentSigner({ network: 'mainnet', stateDir }), /without a mainnet budget ledger/);
+  const devnetLedger = BudgetLedger.init(path.join(stateDir, 'dev.json'), 1, 'devnet');
+  await assert.rejects(loadAgentSigner({ network: 'mainnet', stateDir, ledger: devnetLedger }), /without a mainnet budget ledger/);
+});
+
+test('with a ledger the mainnet payer loads from its own file and binds to that ledger', async () => {
+  const stateDir = mainnetDir();
+  const ledger = BudgetLedger.init(path.join(stateDir, 'budget-mainnet.json'), 1, 'mainnet');
+  const payer = await loadAgentSigner({ network: 'mainnet', stateDir, ledger });
+  assert.equal(payer.source, path.join(stateDir, 'payer-mainnet.key.json'));
+  assert.equal(BudgetLedger.load(ledger.file).state.payer, payer.address);
+
+  const second = BudgetLedger.init(path.join(stateDir, 'second.json'), 1, 'mainnet');
+  await assert.rejects(loadAgentSigner({ network: 'mainnet', stateDir, ledger: second }), /already bound to the ledger/);
+});
+
+test('a mainnet taker must be named, and may not be the payer', async () => {
+  const stateDir = mainnetDir();
+  await assert.rejects(loadAgentSigner({ network: 'mainnet', role: 'taker', stateDir }), /named explicitly/);
+  await assert.rejects(
+    loadAgentSigner({ network: 'mainnet', role: 'taker', stateDir, file: path.join(stateDir, 'payer-mainnet.key.json') }),
+    /paying key/,
+  );
+  const copy = path.join(stateDir, 'copy.key.json');
+  fs.copyFileSync(path.join(stateDir, 'payer-mainnet.key.json'), copy);
+  await assert.rejects(loadAgentSigner({ network: 'mainnet', role: 'taker', stateDir, file: copy }), /holds the paying key/);
+  const taker = await loadAgentSigner({ network: 'mainnet', role: 'taker', stateDir, file: path.join(stateDir, 'taker.key.json') });
+  assert.ok(taker.address);
+});
+
+test('a mainnet client is refused without a ledger, or with one for another network', () => {
+  const signer = { address: 'x' };
+  assert.throws(() => new ZendIQClient({ signer, network: 'mainnet' }), /needs a budget ledger/);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zendiq-client-'));
+  const devnet = BudgetLedger.init(path.join(dir, 'b.json'), 1, 'devnet');
+  assert.throws(() => new ZendIQClient({ signer, network: 'mainnet', budget: devnet }), /ledger is for devnet/);
+});
+
+test('key files: this agent\'s seed format and the Solana CLI 64-byte format', () => {
+  assert.equal(parseKeyFile(JSON.stringify(Array(64).fill(1))).length, 32);
+  assert.equal(parseKeyFile(JSON.stringify({ seed: Array(32).fill(2) })).length, 32);
+  assert.throws(() => parseKeyFile('{}'), /seed byte array/);
+});

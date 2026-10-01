@@ -14,28 +14,24 @@
  * client-side parse error. All diagnostics go to stderr. Never console.log in here.
  *
  * Configuration:
- *   ZENDIQ_AGENT_URL       Base URL of the API. Default https://zendiq-backend.onrender.com
- *   ZENDIQ_AGENT_KEYPAIR   Path to a Solana CLI keypair JSON file used to pay.
- *   ZENDIQ_AGENT_NETWORK   'devnet' (default) or 'mainnet'.
+ *   ZENDIQ_AGENT_URL          Base URL of the API. Default https://zendiq-backend.onrender.com
+ *   ZENDIQ_AGENT_NETWORK      'devnet' (default) or 'mainnet'.
+ *   ZENDIQ_AGENT_BUDGET_FILE  Budget ledger every payment is reserved against. Required on mainnet.
+ *   ZENDIQ_AGENT_KEYPAIR      Devnet only: Solana keypair JSON file used to pay. On mainnet the
+ *                             paying key comes from loadAgentSigner (AGENT_STATE_DIR or
+ *                             AGENT_SECRET_SEED), which refuses to hand it out without the ledger.
  *
- * The keypair is read from disk at startup and never leaves this process. It signs
- * USDC payment authorizations only; ZendIQ never sees it, and the API never returns
- * a transaction to sign.
+ * The keypair is read from disk and never leaves this process. It signs USDC payment
+ * authorizations only; ZendIQ never sees it. Payments go through the same client and
+ * ledger as the examples, so there is one payment path and the ceiling sees all of it (OPS-304).
  */
 
 'use strict';
 
 const fs = require('node:fs');
+const path = require('node:path');
 const readline = require('node:readline');
-const { createKeyPairSignerFromPrivateKeyBytes } = require('@solana/kit');
-const { x402Client, x402HTTPClient } = require('@x402/core/client');
-const { ExactSvmScheme: ExactSvmClientScheme } = require('@x402/svm/exact/client');
-const {
-  SOLANA_DEVNET_CAIP2,
-  SOLANA_MAINNET_CAIP2,
-  DEVNET_RPC_URL,
-  MAINNET_RPC_URL,
-} = require('@x402/svm');
+const { DEVNET_RPC_URL, MAINNET_RPC_URL } = require('@x402/svm');
 
 const PROTOCOL_FALLBACK = '2025-06-18';
 const SERVER_INFO = { name: 'zendiq-agent', version: '1.0.0' };
@@ -43,11 +39,10 @@ const SERVER_INFO = { name: 'zendiq-agent', version: '1.0.0' };
 const BASE_URL = (process.env.ZENDIQ_AGENT_URL ?? 'https://zendiq-backend.onrender.com').replace(/\/+$/, '');
 const ANALYSE_URL = `${BASE_URL}/v1/agent/analyse`;
 const SCREEN_URL = `${BASE_URL}/v1/agent/analyse-token`;
-const OPTIMIZE_URL = `${BASE_URL}/v1/agent/optimize`;
 const KEYPAIR_PATH = process.env.ZENDIQ_AGENT_KEYPAIR ?? null;
+const BUDGET_FILE = process.env.ZENDIQ_AGENT_BUDGET_FILE ?? null;
 const NETWORK = process.env.ZENDIQ_AGENT_NETWORK === 'mainnet' ? 'mainnet' : 'devnet';
 const DEMO_EVENTS_URL = process.env.ZENDIQ_DEMO_EVENTS_URL ?? null;
-const PENDING_RETRY_MS = 5_000;
 
 async function emitDemoEvent(type, data = {}) {
   if (!DEMO_EVENTS_URL) return;
@@ -275,18 +270,21 @@ const TOOL_OPTIMIZE = {
   },
 };
 
-/** @type {{httpClient: object}|null} Lazily built so a missing key fails per-call, not at boot. */
+/** @type {object|null} Lazily built so a missing key or ledger fails per-call, not at boot. */
 let paymentClient = null;
 
-function parseKeypairBytes(contents) {
-  const parsed = JSON.parse(contents);
-  const values = Array.isArray(parsed) ? parsed : parsed?.seed;
-  if (!Array.isArray(values)) throw new Error('expected a byte array or an object with a seed byte array');
-  const bytes = Uint8Array.from(values);
-  if (bytes.length !== 64 && bytes.length !== 32) {
-    throw new Error(`keypair is ${bytes.length} bytes; expected a 64-byte Solana keypair or 32-byte seed`);
-  }
-  return bytes;
+/**
+ * The agent's payment modules: examples/ beside src/ in the published repo, agent/public/ in
+ * the monorepo. Required lazily, so the free tools and tests never need them.
+ *
+ * @param {string} name - Module file name without extension.
+ * @returns {object} Module exports.
+ */
+function agentModule(name) {
+  const dirs = [path.join(__dirname, '..', 'examples'), path.join(__dirname, '..', '..', '..', 'agent', 'public')];
+  const dir = dirs.find((d) => fs.existsSync(path.join(d, `${name}.js`)));
+  if (!dir) throw new Error(`cannot find ${name}.js; expected it in ${dirs.join(' or ')}`);
+  return require(path.join(dir, name));
 }
 
 /**
@@ -308,132 +306,70 @@ function log(...args) {
 }
 
 /**
- * Build the x402 payment client from the configured keypair.
+ * Build the payment client: the examples' ZendIQClient, paying through loadAgentSigner and
+ * reserving every payment in the budget ledger before it is signed.
  *
- * Accepts the 64-byte Solana CLI keypair format and a bare 32-byte seed. Only the
- * first 32 bytes are used — the trailing 32 in the CLI format are the public key,
- * which is derived rather than trusted.
- *
- * @returns {Promise<{httpClient: object}>} Payment client.
+ * @returns {Promise<object>} ZendIQClient.
  */
 async function getPaymentClient() {
   if (paymentClient) return paymentClient;
-  if (!KEYPAIR_PATH) {
-    throw new Error('ZENDIQ_AGENT_KEYPAIR is not set. Point it at a Solana keypair JSON file holding USDC.');
+  const { loadAgentSigner } = agentModule('keys');
+  const { BudgetLedger } = agentModule('budget');
+  const { ZendIQClient } = agentModule('zendiq-client');
+
+  let budget = null;
+  let loaded;
+  if (NETWORK === 'mainnet') {
+    // A key read from an arbitrary path would skip the ledger check in loadAgentSigner.
+    if (KEYPAIR_PATH) {
+      throw new Error('ZENDIQ_AGENT_KEYPAIR is not accepted on mainnet. The paying key is loaded from '
+        + 'AGENT_STATE_DIR/payer-mainnet.key.json or AGENT_SECRET_SEED, and only with a budget ledger.');
+    }
+    if (!BUDGET_FILE) {
+      throw new Error('ZENDIQ_AGENT_BUDGET_FILE is required on mainnet: every payment is reserved against its ceiling.');
+    }
+    budget = BudgetLedger.load(BUDGET_FILE, 'mainnet');
+    loaded = await loadAgentSigner({ network: 'mainnet', ledger: budget });
+  } else {
+    if (!KEYPAIR_PATH) {
+      throw new Error('ZENDIQ_AGENT_KEYPAIR is not set. Point it at a Solana keypair JSON file holding devnet USDC.');
+    }
+    if (BUDGET_FILE) budget = BudgetLedger.load(BUDGET_FILE, 'devnet');
+    loaded = await loadAgentSigner({ network: 'devnet', file: KEYPAIR_PATH, ledger: budget, create: false });
   }
 
-  let bytes;
-  try {
-    bytes = parseKeypairBytes(fs.readFileSync(KEYPAIR_PATH, 'utf8'));
-  } catch (err) {
-    throw new Error(`Could not read the keypair at ${KEYPAIR_PATH}: ${err.message}`);
-  }
-
-  const signer = await createKeyPairSignerFromPrivateKeyBytes(bytes.slice(0, 32));
-  const caip2 = NETWORK === 'mainnet' ? SOLANA_MAINNET_CAIP2 : SOLANA_DEVNET_CAIP2;
-  const rpcUrl = NETWORK === 'mainnet' ? MAINNET_RPC_URL : DEVNET_RPC_URL;
-
-  const client = new x402Client();
-  client.register(caip2, new ExactSvmClientScheme(signer.signer ?? signer, { rpcUrl }));
-
-  log(`paying as ${signer.address} on ${NETWORK}`);
-  paymentClient = { httpClient: new x402HTTPClient(client) };
+  log(`paying as ${loaded.address} on ${NETWORK}${budget ? ` \u00b7 ${budget.banner()}` : ' \u00b7 no budget ledger'}`);
+  paymentClient = new ZendIQClient({
+    signer: loaded.signer,
+    budget,
+    baseUrl: BASE_URL,
+    network: NETWORK,
+    rpcUrl: NETWORK === 'mainnet' ? MAINNET_RPC_URL : DEVNET_RPC_URL,
+    headers: { 'X-ZendIQ-Surface': 'mcp' },
+    onEvent: emitDemoEvent,
+  });
   return paymentClient;
 }
 
 /**
- * Call a paid endpoint, paying the 402 challenge if one is issued.
+ * Call a paid endpoint through the payment client, which pays the 402 if one is issued.
  *
- * @param {string} url - Absolute endpoint URL.
+ * @param {'analyse'|'optimize'} route - Which paid endpoint.
  * @param {object} body - Validated request body.
  * @returns {Promise<object>} Parsed response body.
  */
-async function callPaid(url, body) {
-  const startedAt = Date.now();
-  await emitDemoEvent('call_started', { inputMint: body.inputMint, outputMint: body.outputMint });
-  const post = (headers = {}) => fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'X-ZendIQ-Surface': 'mcp', ...headers },
-    body: JSON.stringify(body),
-  });
-
-  const first = await post();
-  if (first.status !== 402) {
-    const parsed = await first.json().catch(() => null);
-    if (!first.ok) {
-      throw new Error(parsed?.message ?? `Request failed with status ${first.status}.`);
-    }
-    return parsed;
+async function callPaid(route, body) {
+  const client = await getPaymentClient();
+  const result = route === 'optimize' ? await client.optimise(body, { onEvent: emitDemoEvent }) : await client.analyse(body);
+  if (result.ok) return route === 'optimize' ? result.order : result.verdict;
+  if (result.status === 402) {
+    throw new Error(failureMessage({ reason: result.error, transaction: result.settlementTx }, null));
   }
-
-  const { httpClient } = await getPaymentClient();
-  const challenge = httpClient.getPaymentRequiredResponse((n) => first.headers.get(n));
-  const accepted = challenge?.accepts?.[0];
-  const atomic = Number(accepted?.amount ?? accepted?.maxAmountRequired);
-  await emitDemoEvent('payment_required', {
-    priceUsd: Number.isFinite(atomic) ? atomic / 1_000_000 : null,
-    network: NETWORK,
-  });
-  const payload = await httpClient.createPaymentPayload(challenge);
-  await emitDemoEvent('payment_signed', { network: NETWORK });
-  const paymentHeader = httpClient.encodePaymentSignatureHeader(payload);
-  let paid = await post(paymentHeader);
-  // A payment that landed after the server answered is redeemed once by presenting it again (OPS-350).
-  if (paid.status === 402 && settleReason(paid.headers.get('PAYMENT-RESPONSE')) === 'settlement_pending') {
-    await new Promise((resolve) => setTimeout(resolve, PENDING_RETRY_MS));
-    paid = await post(paymentHeader);
-  }
-
-  const parsed = await paid.json().catch(() => null);
-  if (paid.status === 402) {
-    throw new Error(paidFailureMessage(paid.headers.get('PAYMENT-RESPONSE'), parsed));
-  }
-  if (!paid.ok) {
-    await emitDemoEvent('call_failed', { status: paid.status });
-    throw new Error(parsed?.message ?? `Request failed with status ${paid.status}.`);
-  }
-  let settleTx = null;
-  try {
-    const raw = paid.headers.get('PAYMENT-RESPONSE');
-    if (raw) settleTx = JSON.parse(Buffer.from(raw, 'base64').toString('utf8'))?.transaction ?? null;
-  } catch (_) { /* header shape is the facilitator's, not ours */ }
-  await emitDemoEvent('payment_settled', { priceUsd: Number.isFinite(atomic) ? atomic / 1_000_000 : null, tx: settleTx });
-  await emitDemoEvent('analysis_completed', {
-    verdict: parsed.verdict,
-    score: parsed.overallRisk?.score ?? parsed.tokenRisk?.score ?? null,
-    level: parsed.overallRisk?.level ?? parsed.tokenRisk?.level ?? null,
-    overall: parsed.overallRisk ? { score: parsed.overallRisk.score ?? null, level: parsed.overallRisk.level ?? null, floored: !!parsed.overallRisk.floored } : null,
-    execution: parsed.executionRisk ? { score: parsed.executionRisk.score ?? null, level: parsed.executionRisk.level ?? null, factors: (parsed.executionRisk.factors ?? []).map((f) => ({ name: f.name, sev: f.severity, points: f.points })) } : null,
-    tokenRisk: (parsed.tokenRisk && parsed.tokenRisk.available !== false)
-      ? { score: parsed.tokenRisk.score ?? null, level: parsed.tokenRisk.level ?? null, factors: (parsed.tokenRisk.factors ?? []).map((f) => ({ name: f.name, sev: f.severity, points: f.points, detail: f.detail })) }
-      : null,
-    sandwich: (parsed.sandwichExposure && parsed.sandwichExposure.available !== false)
-      ? { score: parsed.sandwichExposure.score ?? null, level: parsed.sandwichExposure.level ?? null, factors: (parsed.sandwichExposure.factors ?? []).map((f) => ({ name: f.factor, points: f.score, detail: f.impact })) }
-      : null,
-    evidenceFingerprint: parsed.evidence_fingerprint ?? null,
-    signalsResolved: parsed.signals_resolved ?? null,
-    snapshot: parsed.snapshot ?? null,
-    latencyMs: Date.now() - startedAt,
-  });
-  return parsed;
+  throw new Error(result.error ?? `Request failed with status ${result.status}.`);
 }
 
 /**
- * The facilitator's errorReason from a PAYMENT-RESPONSE header, or null.
- *
- * @param {string|null} header - PAYMENT-RESPONSE header, base64 JSON.
- * @returns {string|null} Reason.
- */
-function settleReason(header) {
-  try {
-    return header ? JSON.parse(Buffer.from(header, 'base64').toString('utf8'))?.errorReason ?? null : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-/**
- * Explain a 402 that answered a paid request. Only the settlement reason says whether money moved.
+ * Explain a 402 that answered a paid request, from its PAYMENT-RESPONSE header.
  *
  * @param {string|null} header - PAYMENT-RESPONSE header, base64 JSON.
  * @param {object|null} parsed - Response body.
@@ -444,10 +380,20 @@ function paidFailureMessage(header, parsed) {
   try {
     if (header) settle = JSON.parse(Buffer.from(header, 'base64').toString('utf8'));
   } catch (_) { /* header shape is the facilitator's, not ours */ }
-  const reason = settle?.errorReason ?? null;
+  return failureMessage({ reason: settle?.errorReason ?? null, transaction: settle?.transaction ?? null }, parsed);
+}
+
+/**
+ * Explain a payment that was not served. Only the settlement reason says whether money moved.
+ *
+ * @param {{reason: string|null, transaction: string|null}} settle - Settlement outcome.
+ * @param {object|null} parsed - Response body.
+ * @returns {string} Message for the agent.
+ */
+function failureMessage({ reason, transaction }, parsed) {
   if (reason === 'settlement_pending') {
     return 'Settlement could not be confirmed, and a retry with the same payment was not served either, so this payment MAY have been charged. '
-      + `Check transaction ${settle.transaction || '(not reported)'} on chain before calling again.`;
+      + `Check transaction ${transaction || '(not reported)'} on chain before calling again.`;
   }
   if (reason === 'settlement_failed_on_chain' || reason === 'settlement_not_landed') {
     return `Payment did not settle (${reason}) and nothing was charged. Calling again signs a fresh authorization.`;
@@ -581,9 +527,9 @@ async function handle(msg) {
         if (name === TOOL_SCREEN.name) {
           result = await callScreen(buildScreenRequest(msg.params?.arguments));
         } else if (name === TOOL_OPTIMIZE.name) {
-          result = await callPaid(OPTIMIZE_URL, buildOptimizeRequest(msg.params?.arguments));
+          result = await callPaid('optimize', buildOptimizeRequest(msg.params?.arguments));
         } else {
-          result = project(await callPaid(ANALYSE_URL, buildRequest(msg.params?.arguments)));
+          result = project(await callPaid('analyse', buildRequest(msg.params?.arguments)));
         }
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
@@ -632,4 +578,4 @@ function start() {
 
 if (require.main === module) start();
 
-module.exports = { project, buildRequest, buildOptimizeRequest, paidFailureMessage, handle, start, emitDemoEvent, parseKeypairBytes };
+module.exports = { project, buildRequest, buildOptimizeRequest, paidFailureMessage, handle, start, emitDemoEvent };

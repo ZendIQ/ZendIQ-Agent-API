@@ -186,8 +186,6 @@ async function handle(candidate, client, run, budget) {
 }
 
 async function main() {
-  const { signer, address } = await loadAgentSigner({ network: NETWORK });
-
   let budget;
   try {
     budget = BudgetLedger.load(BUDGET_FILE, NETWORK);
@@ -196,6 +194,7 @@ async function main() {
     console.error(`hint: npm run budget:init\n`);
     process.exit(1);
   }
+  const { signer, address } = await loadAgentSigner({ network: NETWORK, ledger: budget });
 
   console.log(`\nZendIQ agent — watch  ${NETWORK}`);
   console.log(`  api     ${API}`);

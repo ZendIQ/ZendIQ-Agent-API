@@ -41,7 +41,7 @@ const SWAP = {
     process.exit(1);
   }
 
-  const { address, source } = await loadAgentSigner({ network: NETWORK });
+  const { signer, address, source } = await loadAgentSigner({ network: NETWORK, ledger: budget });
 
   console.log(`\nZendIQ agent  ${NETWORK}`);
   console.log(`  api     ${BASE_URL}`);
@@ -49,7 +49,6 @@ const SWAP = {
   console.log(`  key     ${source}`);
   console.log(`  ${budget.banner()}\n`);
 
-  const { signer } = await loadAgentSigner({ network: NETWORK });
   const client = new ZendIQClient({ signer, budget, baseUrl: BASE_URL, network: NETWORK, rpcUrl: RPC_URL });
 
   const manifest = await client.manifest();
