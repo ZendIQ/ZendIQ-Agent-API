@@ -4,12 +4,14 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { BudgetLedger } = require('../examples/budget');
 const { loadAgentSigner } = require('../examples/keys');
-const { ZendIQClient, signAndExecute } = require('../examples/zendiq-client');
+const { ZendIQClient, signAndExecute, resolveNetwork } = require('../examples/zendiq-client');
 
-const NETWORK = process.env.AGENT_NETWORK ?? 'devnet';
-const BASE_URL = process.env.ZENDIQ_API_URL ?? 'https://zendiq-backend.onrender.com';
-const RPC_URL = process.env.AGENT_RPC_URL
-  ?? (NETWORK === 'mainnet' ? 'https://api.mainnet-beta.solana.com' : 'https://api.devnet.solana.com');
+const BASE_URL = process.env.ZENDIQ_API_URL ?? 'https://api.zendiq.ai';
+// Set from the live manifest at the start of main(); see resolveNetwork.
+let NETWORK;
+let RPC_URL;
+let BUDGET_FILE;
+let KEY_FILE;
 const EVENT_URL = process.env.ZENDIQ_DEMO_EVENTS_URL ?? 'http://127.0.0.1:4173/api/events';
 const RESET_URL = EVENT_URL.replace(/\/api\/events$/, '/api/reset');
 const args = process.argv.slice(2);
@@ -25,10 +27,16 @@ const SWAP = {
 };
 const METHOD = valueFor('--method', null);
 const STATE_DIR = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
-const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(STATE_DIR, `budget-${NETWORK}.json`);
-// Mainnet pays only with loadAgentSigner's own payer-mainnet.key.json, never a path from the environment.
-const KEY_FILE = NETWORK === 'mainnet' ? undefined
-  : (process.env.ZENDIQ_AGENT_KEYPAIR ?? path.join(STATE_DIR, `agent-${NETWORK}.key.json`));
+
+async function configureNetwork() {
+  NETWORK = await resolveNetwork(BASE_URL);
+  RPC_URL = process.env.AGENT_RPC_URL
+    ?? (NETWORK === 'mainnet' ? 'https://api.mainnet-beta.solana.com' : 'https://api.devnet.solana.com');
+  BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(STATE_DIR, `budget-${NETWORK}.json`);
+  // Mainnet pays only with loadAgentSigner's own payer-mainnet.key.json, never a path from the environment.
+  KEY_FILE = NETWORK === 'mainnet' ? undefined
+    : (process.env.ZENDIQ_AGENT_KEYPAIR ?? path.join(STATE_DIR, `agent-${NETWORK}.key.json`));
+}
 
 async function emit(type, transport, data) {
   const response = await fetch(EVENT_URL, {
@@ -91,6 +99,7 @@ function callMcp() {
 }
 
 async function main() {
+  await configureNetwork();
   await preflight();
   if (args.includes('--check')) return;
   await fetch(RESET_URL, { method: 'POST' });

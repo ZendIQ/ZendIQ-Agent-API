@@ -336,15 +336,29 @@ class BudgetLedger {
 module.exports = { BudgetLedger, BudgetExceededError };
 
 if (require.main === module) {
-  const network = process.env.AGENT_NETWORK ?? 'devnet';
-  const stateDir = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
-  const file = process.env.AGENT_BUDGET_FILE ?? path.join(stateDir, `budget-${network}.json`);
-  const [cmd, arg] = process.argv.slice(2);
-  if (cmd === 'init') {
-    const ledger = BudgetLedger.init(file, Number(arg ?? '1'), network);
-    console.log(`created ${file}`);
-    console.log(ledger.banner());
-  } else {
-    console.log(BudgetLedger.load(file).banner());
-  }
+  (async () => {
+    // Creating a ledger spends nothing, and a mainnet ceiling must exist before the API
+    // switches, so an explicit AGENT_NETWORK is taken as given; unset, the API decides.
+    const pinned = (process.env.AGENT_NETWORK ?? '').trim().toLowerCase();
+    let network = pinned;
+    if (!pinned) {
+      const { resolveNetwork } = require('./zendiq-client');
+      network = await resolveNetwork(process.env.ZENDIQ_API_URL ?? 'https://api.zendiq.ai', { expected: null });
+    } else if (pinned !== 'devnet' && pinned !== 'mainnet') {
+      throw new Error(`AGENT_NETWORK must be "devnet" or "mainnet", not "${process.env.AGENT_NETWORK}"`);
+    }
+    const stateDir = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
+    const file = process.env.AGENT_BUDGET_FILE ?? path.join(stateDir, `budget-${network}.json`);
+    const [cmd, arg] = process.argv.slice(2);
+    if (cmd === 'init') {
+      const ledger = BudgetLedger.init(file, Number(arg ?? '1'), network);
+      console.log(`created ${file}`);
+      console.log(ledger.banner());
+    } else {
+      console.log(BudgetLedger.load(file, network).banner());
+    }
+  })().catch((err) => {
+    console.error(`\n${err.message}\n`);
+    process.exitCode = 1;
+  });
 }

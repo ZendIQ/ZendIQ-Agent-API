@@ -101,3 +101,18 @@ test('key files: this agent\'s seed format and the Solana CLI 64-byte format', (
   assert.equal(parseKeyFile(JSON.stringify({ seed: Array(32).fill(2) })).length, 32);
   assert.throws(() => parseKeyFile('{}'), /seed byte array/);
 });
+
+test('payment network comes from the manifest; a disagreeing pin or an unreadable manifest refuses', async () => {
+  const { resolveNetwork } = require('./zendiq-client');
+  const serve = (body, status = 200) => async (url) => {
+    assert.equal(url, 'https://api.example/v1/agent');
+    return { ok: status === 200, status, json: async () => body };
+  };
+  assert.equal(await resolveNetwork('https://api.example/', { expected: undefined, fetchImpl: serve({ network: 'mainnet' }) }), 'mainnet');
+  assert.equal(await resolveNetwork('https://api.example', { expected: 'DEVNET', fetchImpl: serve({ network: 'devnet' }) }), 'devnet');
+  await assert.rejects(resolveNetwork('https://api.example', { expected: 'devnet', fetchImpl: serve({ network: 'mainnet' }) }), /settles on mainnet/);
+  await assert.rejects(resolveNetwork('https://api.example', { expected: 'testnet', fetchImpl: serve({ network: 'mainnet' }) }), /"devnet" or "mainnet"/);
+  await assert.rejects(resolveNetwork('https://api.example', { expected: null, fetchImpl: serve({ network: 'solana' }) }), /expected devnet or mainnet/);
+  await assert.rejects(resolveNetwork('https://api.example', { expected: null, fetchImpl: serve({}, 503) }), /refusing to guess/);
+  await assert.rejects(resolveNetwork('https://api.example', { expected: null, fetchImpl: async () => { throw new Error('fetch failed'); } }), /refusing to guess/);
+});

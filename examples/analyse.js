@@ -13,14 +13,10 @@
 const path = require('node:path');
 const { BudgetLedger } = require('./budget');
 const { loadAgentSigner } = require('./keys');
-const { ZendIQClient } = require('./zendiq-client');
+const { ZendIQClient, resolveNetwork } = require('./zendiq-client');
 
-const NETWORK = process.env.AGENT_NETWORK ?? 'devnet';
-const BASE_URL = process.env.ZENDIQ_API_URL ?? 'https://zendiq-backend.onrender.com';
-const RPC_URL = process.env.AGENT_RPC_URL
-  ?? (NETWORK === 'mainnet' ? 'https://api.mainnet-beta.solana.com' : 'https://api.devnet.solana.com');
+const BASE_URL = process.env.ZENDIQ_API_URL ?? 'https://api.zendiq.ai';
 const STATE_DIR = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
-const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(STATE_DIR, `budget-${NETWORK}.json`);
 
 // SOL -> BONK: a memecoin output, so the verdict exercises the token-class path
 // that §12.2.1 made the primary Protect trigger.
@@ -32,13 +28,27 @@ const SWAP = {
 };
 
 (async () => {
+  let NETWORK;
+  try {
+    NETWORK = await resolveNetwork(BASE_URL);
+  } catch (err) {
+    // exitCode, not exit(): exiting while fetch's socket closes trips a libuv assertion on Windows.
+    console.error(`\n${err.message}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const RPC_URL = process.env.AGENT_RPC_URL
+    ?? (NETWORK === 'mainnet' ? 'https://api.mainnet-beta.solana.com' : 'https://api.devnet.solana.com');
+  const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(STATE_DIR, `budget-${NETWORK}.json`);
+
   let budget;
   try {
     budget = BudgetLedger.load(BUDGET_FILE, NETWORK);
   } catch (err) {
     console.error(`\n${err.message}\n`);
     console.error(`  AGENT_NETWORK=${NETWORK} npm run budget:init\n`);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const { signer, address, source } = await loadAgentSigner({ network: NETWORK, ledger: budget });

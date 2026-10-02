@@ -55,7 +55,7 @@
   const submitLabels={jito_bundle:'Submitted to Jito via ZendIQ',rpc_send_transaction:'Submitted via RPC',jupiter_ultra_execute:'Submitted to Jupiter'};
   const state={mcp:{},http:{},exec:{}};
   function lane(name){return document.querySelector(`[data-lane="${name}"]`)}
-  function solscanCell(sig){if(!/^[1-9A-HJ-NP-Za-km-z]{32,100}$/.test(sig))return '<span class="value"></span>';const short=sig.slice(0,4)+'…'+sig.slice(-4);return `<a class="solscan" href="https://solscan.io/tx/${sig}?cluster=devnet" target="_blank" rel="noopener">${short} ↗</a>`}
+  function solscanCell(sig){if(!/^[1-9A-HJ-NP-Za-km-z]{32,100}$/.test(sig))return '<span class="value"></span>';const short=sig.slice(0,4)+'…'+sig.slice(-4);return `<a class="solscan" href="https://solscan.io/tx/${sig}" target="_blank" rel="noopener">${short} ↗</a>`}
   function solscanCellMain(sig){if(!/^[1-9A-HJ-NP-Za-km-z]{32,100}$/.test(sig))return '<span class="value"></span>';const short=sig.slice(0,4)+'…'+sig.slice(-4);return `<a class="solscan" href="https://solscan.io/tx/${sig}" target="_blank" rel="noopener">${short} ↗</a>`}
   // The submit route comes from the response's submit.method; naming the wrong one would misdescribe who lands the trade.
   function execLabel(type,d){if(type==='executing')return submitLabels[d.submitMethod||state.exec.submitMethod]||execLabels.executing;return execLabels[type]}

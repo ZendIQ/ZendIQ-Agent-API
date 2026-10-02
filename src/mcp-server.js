@@ -14,8 +14,8 @@
  * client-side parse error. All diagnostics go to stderr. Never console.log in here.
  *
  * Configuration:
- *   ZENDIQ_AGENT_URL          Base URL of the API. Default https://zendiq-backend.onrender.com
- *   ZENDIQ_AGENT_NETWORK      'devnet' (default) or 'mainnet'.
+ *   ZENDIQ_AGENT_URL          Base URL of the API. Default https://api.zendiq.ai
+ *   ZENDIQ_AGENT_NETWORK      'mainnet' (default) or 'devnet'. Any other value refuses to pay.
  *   ZENDIQ_AGENT_BUDGET_FILE  Budget ledger every payment is reserved against. Required on mainnet.
  *   ZENDIQ_AGENT_KEYPAIR      Devnet only: Solana keypair JSON file used to pay. On mainnet the
  *                             paying key comes from loadAgentSigner (AGENT_STATE_DIR or
@@ -36,12 +36,15 @@ const { DEVNET_RPC_URL, MAINNET_RPC_URL } = require('@x402/svm');
 const PROTOCOL_FALLBACK = '2025-06-18';
 const SERVER_INFO = { name: 'zendiq-agent', version: '1.0.0' };
 
-const BASE_URL = (process.env.ZENDIQ_AGENT_URL ?? 'https://zendiq-backend.onrender.com').replace(/\/+$/, '');
+const BASE_URL = (process.env.ZENDIQ_AGENT_URL ?? 'https://api.zendiq.ai').replace(/\/+$/, '');
 const ANALYSE_URL = `${BASE_URL}/v1/agent/analyse`;
 const SCREEN_URL = `${BASE_URL}/v1/agent/analyse-token`;
 const KEYPAIR_PATH = process.env.ZENDIQ_AGENT_KEYPAIR ?? null;
 const BUDGET_FILE = process.env.ZENDIQ_AGENT_BUDGET_FILE ?? null;
-const NETWORK = process.env.ZENDIQ_AGENT_NETWORK === 'mainnet' ? 'mainnet' : 'devnet';
+// A typo must not fall back to either network: devnet would fail every payment quietly,
+// mainnet would spend. null makes the paying tools refuse and say why.
+const NETWORK_SETTING = (process.env.ZENDIQ_AGENT_NETWORK ?? '').trim().toLowerCase() || 'mainnet';
+const NETWORK = ['mainnet', 'devnet'].includes(NETWORK_SETTING) ? NETWORK_SETTING : null;
 const DEMO_EVENTS_URL = process.env.ZENDIQ_DEMO_EVENTS_URL ?? null;
 
 async function emitDemoEvent(type, data = {}) {
@@ -65,16 +68,13 @@ const TOOL = {
     + 'estimates sandwich-attack exposure. Advisory only: no transaction is built, no keys '
     + 'are handled, and nothing is executed on your behalf. Each call costs $0.01 in USDC, '
     + 'paid automatically via x402. '
-    + 'NETWORK: the API is in its testing phase, so payment settles in DEVNET USDC (free test '
-    + 'money); an agent funded only on mainnet cannot pay for this call yet. At launch payment '
-    + 'moves to mainnet USDC. The market data analysed is always mainnet, so the verdict is '
-    + 'about real liquidity. '
+    + 'NETWORK: payment settles in mainnet USDC on Solana. The market data analysed is '
+    + 'mainnet, so the verdict is about real liquidity. '
     + 'The full risk breakdown behind the verdict — token risk '
     + 'factors, sandwich exposure detail, and route economics — is available on the HTTP '
     + 'endpoint POST /v1/agent/analyse. The HTTP endpoint POST /v1/agent/optimize ($0.02) '
     + 'additionally returns an unsigned mainnet transaction, so its taker must be a mainnet '
-    + 'wallet holding the input amount and SOL for fees and rent, even though that call is '
-    + 'also paid for in devnet USDC.',
+    + 'wallet holding the input amount and SOL for fees and rent.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -126,9 +126,8 @@ const TOOL_SCREEN = {
     'Screen a single Solana token by mint address, before you have a trade size. Returns '
     + 'the token risk score (rug / honeypot / mint & freeze authority / holder concentration '
     + 'signals) with a signals-resolved coverage figure and cache age. Free and rate-limited '
-    + '— the cheap "should I even look at this?" call for scanning many mints. Because it is '
-    + 'free, the devnet-USDC payment constraint that applies to zendiq_triage_swap does not '
-    + 'apply here; the token data itself is mainnet. To score a '
+    + '— the cheap "should I even look at this?" call for scanning many mints. No wallet or '
+    + 'payment is needed; the token data is mainnet. To score a '
     + 'specific trade (sandwich exposure, route, fees) use zendiq_triage_swap, which returns '
     + 'this same token score inline, so screening first is optional, never required.',
   inputSchema: {
@@ -178,14 +177,12 @@ const TOOL_OPTIMIZE = {
     + 'still builds the transaction on a Refuse: read `verdict` before signing, and do not sign a '
     + 'Refuse unless you mean to trade against ZendIQ\'s verdict. If the open question is still '
     + 'whether to trade at all, zendiq_triage_swap answers it for $0.01 without building anything. '
-    + 'NETWORK: the API is in its testing phase, so payment settles in DEVNET USDC (free test '
-    + 'money) from the paying wallet; an agent funded only on mainnet cannot pay for this call '
-    + 'yet. At launch payment moves to mainnet USDC. The swap itself is always built against '
-    + 'MAINNET liquidity for `taker`, a mainnet wallet that must hold the input amount and SOL '
+    + 'NETWORK: payment settles in mainnet USDC on Solana, from the paying wallet. The swap is '
+    + 'built against MAINNET liquidity for `taker`, a wallet that must hold the input amount and SOL '
     + 'for the network fee and token account rent (a gasless Jupiter Ultra fill is exempt from '
     + 'the SOL). A taker that cannot fund the trade gets 422 taker_insufficient_balance, '
-    + 'uncharged, naming the token and the shortfall. During testing the paying wallet and the '
-    + 'taker are two different wallets, and the returned transaction is only submittable by '
+    + 'uncharged, naming the token and the shortfall. The paying wallet and the taker may be '
+    + 'the same wallet or two different ones; the returned transaction is only submittable by '
     + 'the taker.',
   inputSchema: {
     type: 'object',
@@ -319,6 +316,9 @@ async function getPaymentClient() {
 
   let budget = null;
   let loaded;
+  if (!NETWORK) {
+    throw new Error(`ZENDIQ_AGENT_NETWORK must be "mainnet" or "devnet", not "${process.env.ZENDIQ_AGENT_NETWORK}".`);
+  }
   if (NETWORK === 'mainnet') {
     // A key read from an arbitrary path would skip the ledger check in loadAgentSigner.
     if (KEYPAIR_PATH) {
@@ -573,7 +573,7 @@ function start() {
   });
 
   rl.on('close', () => process.exit(0));
-  log(`ready — ${ANALYSE_URL} (${NETWORK})`);
+  log(`ready — ${ANALYSE_URL} (${NETWORK ?? `invalid ZENDIQ_AGENT_NETWORK "${NETWORK_SETTING}" — paid tools will refuse`})`);
 }
 
 if (require.main === module) start();

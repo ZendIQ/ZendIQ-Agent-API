@@ -81,13 +81,47 @@ async function retryTransient(fn, attempts = 3) {
   }
 }
 
+/** Networks the client can pay on; anything else from the manifest is a refusal, not a guess. */
+const NETWORKS = new Set(['devnet', 'mainnet']);
+
+/**
+ * The payment network, read from the live manifest rather than assumed, so the same
+ * script follows the service across the devnet-to-mainnet switch. `expected` (normally
+ * AGENT_NETWORK) is a pin, not an override: if it disagrees with the API the run stops,
+ * because paying, budgeting and key selection on the wrong network all go wrong quietly.
+ *
+ * @param {string} baseUrl - API base URL.
+ * @param {object} [opts] - `expected` network pin, `fetchImpl` for tests.
+ * @returns {Promise<'devnet'|'mainnet'>} Network the API settles on.
+ * @throws {Error} When the manifest is unreachable, unrecognised, or contradicts `expected`.
+ */
+async function resolveNetwork(baseUrl, { expected = process.env.AGENT_NETWORK, fetchImpl = fetch } = {}) {
+  const pin = (expected ?? '').trim().toLowerCase() || null;
+  if (pin && !NETWORKS.has(pin)) throw new Error(`AGENT_NETWORK must be "devnet" or "mainnet", not "${expected}"`);
+  const url = `${String(baseUrl).replace(/\/$/, '')}/v1/agent`;
+  let manifest;
+  try {
+    const r = await fetchImpl(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    manifest = await r.json();
+  } catch (err) {
+    throw new Error(`cannot read the payment network from ${url} (${err.message}); refusing to guess`);
+  }
+  const network = manifest?.network;
+  if (!NETWORKS.has(network)) throw new Error(`${url} reports network ${JSON.stringify(network)}; expected devnet or mainnet`);
+  if (pin && pin !== network) {
+    throw new Error(`AGENT_NETWORK=${pin}, but ${url} settles on ${network}. Unset AGENT_NETWORK or point ZENDIQ_API_URL at a ${pin} server.`);
+  }
+  return network;
+}
+
 class ZendIQClient {
   /**
    * @param {object} opts - `signer`, `budget`, `baseUrl`, `network`, `rpcUrl`, optional `headers`,
    *   `pendingRetryMs` (wait before the one retry after settlement_pending, default 5000).
    */
   constructor(opts) {
-    this.baseUrl = (opts.baseUrl ?? 'https://zendiq-backend.onrender.com').replace(/\/$/, '');
+    this.baseUrl = (opts.baseUrl ?? 'https://api.zendiq.ai').replace(/\/$/, '');
     this.network = opts.network ?? 'devnet';
     if (!opts.budget && this.network === 'mainnet') {
       throw new Error('a mainnet ZendIQClient needs a budget ledger: every payment must pass through the ceiling (OPS-304)');
@@ -481,7 +515,7 @@ async function signAndExecute({
   signer,
   executeUrl = 'https://lite-api.jup.ag/ultra/v1/execute',
   rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
-  apiBaseUrl = 'https://zendiq-backend.onrender.com',
+  apiBaseUrl = 'https://api.zendiq.ai',
   onEvent = () => {},
   bundlePollMs = 60_000,
 }) {
@@ -572,4 +606,4 @@ async function signAndExecute({
   };
 }
 
-module.exports = { ZendIQClient, decodeHeader, signAndExecute };
+module.exports = { ZendIQClient, decodeHeader, signAndExecute, resolveNetwork };

@@ -18,16 +18,14 @@
 const path = require('node:path');
 const { BudgetLedger, BudgetExceededError } = require('./budget.js');
 const { loadAgentSigner } = require('./keys.js');
-const { ZendIQClient } = require('./zendiq-client.js');
+const { ZendIQClient, resolveNetwork } = require('./zendiq-client.js');
 const { TokenFeed, describe } = require('./feed.js');
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-const NETWORK = process.env.AGENT_NETWORK ?? 'devnet';
-const API = process.env.ZENDIQ_API_URL ?? 'https://zendiq-backend.onrender.com';
+const API = process.env.ZENDIQ_API_URL ?? 'https://api.zendiq.ai';
 const STATE_DIR = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
-const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(STATE_DIR, `budget-${NETWORK}.json`);
 const TRADE_LAMPORTS = process.env.AGENT_TRADE_LAMPORTS ?? '20000000'; // 0.02 SOL
 const LIMIT = Number(process.env.AGENT_LIMIT ?? '5');
 const REPLAY = process.env.AGENT_FEED_REPLAY ?? null;
@@ -186,13 +184,16 @@ async function handle(candidate, client, run, budget) {
 }
 
 async function main() {
+  const NETWORK = await resolveNetwork(API);
+  const BUDGET_FILE = process.env.AGENT_BUDGET_FILE ?? path.join(STATE_DIR, `budget-${NETWORK}.json`);
   let budget;
   try {
     budget = BudgetLedger.load(BUDGET_FILE, NETWORK);
   } catch (err) {
     console.error(`\n${err.message}`);
     console.error(`hint: npm run budget:init\n`);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   const { signer, address } = await loadAgentSigner({ network: NETWORK, ledger: budget });
 
@@ -237,7 +238,8 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => {
     console.error(`\nwatch failed: ${err.message}\n`);
-    process.exit(1);
+    // exitCode, not exit(): exiting while fetch's socket closes trips a libuv assertion on Windows.
+    process.exitCode = 1;
   });
 }
 
