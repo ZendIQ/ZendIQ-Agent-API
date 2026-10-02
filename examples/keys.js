@@ -161,6 +161,14 @@ async function loadMainnetTaker(file, stateDir) {
       throw new Error(`${file} holds the paying key ${signer.address}; a taker must be a different wallet`);
     }
   }
+  // A payer supplied as a seed may not be bound yet, so it is checked directly.
+  const seed = (process.env.AGENT_SECRET_SEED ?? '').trim();
+  if (seed) {
+    const payer = await createKeyPairSignerFromPrivateKeyBytes(Uint8Array.from(JSON.parse(seed)));
+    if (payer.address === signer.address) {
+      throw new Error(`${file} holds the AGENT_SECRET_SEED paying key ${signer.address}; a taker must be a different wallet`);
+    }
+  }
   return { signer, address: signer.address, source: file };
 }
 
