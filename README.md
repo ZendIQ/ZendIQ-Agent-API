@@ -298,7 +298,7 @@ Additional fields are experimental and may change within `v1`. Stable fields are
 
 `POST /v1/agent/optimize`
 
-Same request body as `/analyse` plus a `taker` public key. Returns an **unsigned** swap `transaction`, the `plan` (venue, slippage, priority fee, and the `venueDecision` comparison behind the venue), a `simulation` result, and the `netBenefit` breakdown. Zero custody — you verify, sign, and submit. Priced per call in USDC.
+Same request body as `/analyse` plus a `taker` public key. Returns an **unsigned** swap `transaction`, the `plan` (venue, slippage, priority fee, and the `venueDecision` comparison behind the venue), a `simulation` result, the `netBenefit` breakdown, and the same `verdict`, `confidence` and `reasons` as `/analyse`. Zero custody — you verify, sign, and submit. Priced per call in USDC.
 
 The venue is chosen by risk, so read `plan.venue` rather than assuming one. **Jupiter Ultra** is used for low-risk trades and for sandwich-driven risk, where its upstream MEV protection is the instrument that addresses the exposure; it sizes the priority fee itself. The **Jupiter Swap API** (Quote + Build) is used when risk scoring calls for a specific priority fee, which Ultra cannot honour — there `plan.priorityFee` reports the fee actually applied, read back out of the build, and the route carries no upstream MEV protection.
 
@@ -306,7 +306,7 @@ A direct venue is quoted alongside and replaces the Jupiter route only when it b
 
 **Submission differs by venue** — follow the returned `submit` object rather than hardcoding a path. On `jupiter_ultra`, sign `transaction` and POST `{ signedTransaction, requestId }` to `https://lite-api.jup.ag/ultra/v1/execute`; submitting through your own RPC instead forfeits Ultra's MEV protection and invalidates the `netBenefit` figures. On `jupiter_swap` and `raydium` there is no `requestId` (it is `null`) and no `/execute` step — sign and send to your own RPC, with the priority fee already inside the transaction. Send a `raydium` transaction promptly: Raydium embeds its own blockhash and `submit.lastValidBlockHeight` is `null`.
 
-`/optimize` does not return a verdict and does not refuse a trade: it builds a transaction even for a token that scores `CRITICAL`. Check `tokenRisk.level` before signing, or call `/analyse` first.
+`/optimize` returns the same `verdict` (Safe / Protect / Refuse) as `/analyse` but does not refuse to build: a `Refuse` still comes back with a transaction, even for a token that scores `CRITICAL`. Read `verdict` and `tokenRisk` before signing, and do not sign a `Refuse` unless you mean to trade against it.
 
 ### When token screening does not complete
 
