@@ -174,5 +174,6 @@ async function main() {
 main().catch(async (err) => {
   try { await emit('call_failed', 'system', { message: err.message }); } catch (_) {}
   console.error(err.message);
-  process.exit(1);
+  // exitCode, not exit(): exiting while fetch's socket closes trips a libuv assertion on Windows.
+  process.exitCode = 1;
 });
