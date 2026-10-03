@@ -121,22 +121,53 @@ async function loadAgentSigner(opts = {}) {
   return loaded;
 }
 
-async function loadPayer({ network, stateDir, file: fileOpt, seedEnv: seedEnvOpt, create = true }) {
+/**
+ * Find the paying key without deciding between two. A seed in the environment and a key file
+ * that hold different keys is refused, never resolved by precedence: whichever silently won
+ * would spend from a wallet the operator did not mean (OPS-382).
+ *
+ * @param {object} opts - Options.
+ * @param {string} opts.network - 'devnet' or 'mainnet'.
+ * @param {string} opts.stateDir - Runtime directory.
+ * @param {string|null} [opts.file] - A key file named explicitly, e.g. ZENDIQ_AGENT_KEYPAIR.
+ * @param {string} [opts.seedEnv] - Env var holding a 32-byte seed array.
+ * @returns {Promise<{signer: object|null, address: string|null, source: string|null, file: string}>} Key, or nulls when none is present.
+ * @throws {Error} When the two sources disagree, or a named file is missing while a seed is set.
+ */
+async function findPayerKey({ network, stateDir, file: fileOpt = null, seedEnv = 'AGENT_SECRET_SEED' }) {
   const file = fileOpt ?? path.join(stateDir, network === 'mainnet' ? PAYER_MAINNET_FILE : `agent-${network}.key.json`);
+
+  let fromEnv = null;
+  const raw = (process.env[seedEnv] ?? '').trim();
+  if (raw) {
+    const seed = Uint8Array.from(JSON.parse(raw));
+    if (seed.length !== 32) throw new Error(`${seedEnv} must be a JSON array of exactly 32 bytes (a seed)`);
+    fromEnv = await createKeyPairSignerFromPrivateKeyBytes(seed);
+  }
+  const fromFile = fs.existsSync(file)
+    ? await createKeyPairSignerFromPrivateKeyBytes(parseKeyFile(fs.readFileSync(file, 'utf8')))
+    : null;
+
+  if (fromEnv && fromFile && fromEnv.address !== fromFile.address) {
+    throw new Error(`two paying keys disagree: ${seedEnv} holds ${fromEnv.address}, ${file} holds `
+      + `${fromFile.address}. Refusing to choose between them; remove one.`);
+  }
+  if (fileOpt && !fromFile && fromEnv) {
+    throw new Error(`${file} was named as the paying key but does not exist, and ${seedEnv} is set. `
+      + 'Refusing to fall back to the seed.');
+  }
+  if (fromFile) {
+    return { signer: fromFile, address: fromFile.address, source: fromEnv ? `${file} (matches ${seedEnv})` : file, file };
+  }
+  if (fromEnv) return { signer: fromEnv, address: fromEnv.address, source: `env:${seedEnv}`, file };
+  return { signer: null, address: null, source: null, file };
+}
+
+async function loadPayer({ network, stateDir, file: fileOpt, seedEnv: seedEnvOpt, create = true }) {
   const seedEnv = seedEnvOpt ?? 'AGENT_SECRET_SEED';
-
-  const fromEnv = (process.env[seedEnv] ?? '').trim();
-  if (fromEnv) {
-    const seed = Uint8Array.from(JSON.parse(fromEnv));
-    if (seed.length !== 32) throw new Error(`${seedEnv} must be a 32-byte seed array`);
-    const signer = await createKeyPairSignerFromPrivateKeyBytes(seed);
-    return { signer, address: signer.address, source: `env:${seedEnv}` };
-  }
-
-  if (fs.existsSync(file)) {
-    const signer = await createKeyPairSignerFromPrivateKeyBytes(parseKeyFile(fs.readFileSync(file, 'utf8')));
-    return { signer, address: signer.address, source: file };
-  }
+  const found = await findPayerKey({ network, stateDir, file: fileOpt ?? null, seedEnv });
+  if (found.signer) return { signer: found.signer, address: found.address, source: found.source };
+  const { file } = found;
 
   if (network === 'mainnet') {
     throw new Error(
@@ -196,4 +227,4 @@ async function loadMainnetTaker(file, stateDir) {
   return { signer, address: signer.address, source: file };
 }
 
-module.exports = { loadAgentSigner, parseKeyFile, resolveStateDir, PAYER_MAINNET_FILE };
+module.exports = { loadAgentSigner, findPayerKey, parseKeyFile, resolveStateDir, PAYER_MAINNET_FILE };

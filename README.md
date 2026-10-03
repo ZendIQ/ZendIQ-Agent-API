@@ -35,7 +35,7 @@ npm ci
 npm run budget:init
 ```
 
-**2. Provide and fund the paying key.** This code never generates or writes a mainnet key. Put a Solana keypair you control at `runtime/payer-mainnet.key.json` (Solana CLI format, for example `solana-keygen new -o runtime/payer-mainnet.key.json`), or pass its 32-byte seed in `AGENT_SECRET_SEED`. Fund its address with a little USDC on Solana mainnet. No SOL is needed: the x402 facilitator pays the payment's network fee. $1 covers 100 calls at `$0.01`. Use a dedicated wallet, because the ledger only bounds what is paid through this code.
+**2. Provide and fund the paying key.** This code never generates or writes a mainnet key. Put a Solana keypair you control at `runtime/payer-mainnet.key.json`: any file `solana-keygen` writes, for example `solana-keygen new -o runtime/payer-mainnet.key.json`. Fund its address with a little USDC on Solana mainnet. No SOL is needed: the x402 facilitator pays the payment's network fee. $1 covers 100 calls at `$0.01`. Use a dedicated wallet, because the ledger only bounds what is paid through this code.
 
 **3. Make one paid call** (`$0.01`):
 
@@ -152,7 +152,7 @@ Register it in your MCP client's config. The package runs straight from npm, wit
 That is enough for `zendiq_screen_token`, which is free and needs no wallet. The paid tools need two more things, both kept in `~/.zendiq` (or `AGENT_STATE_DIR`):
 
 1. A spend ceiling: `npx -y @zendiq/mcp budget init 1.00` writes `budget-mainnet.json`. It spends nothing. `npx -y @zendiq/mcp budget` shows what has been spent.
-2. A paying key holding mainnet USDC: put a Solana keypair you control at `~/.zendiq/payer-mainnet.key.json`, or pass its 32-byte seed in `AGENT_SECRET_SEED`. It is never generated for you.
+2. A paying key holding mainnet USDC at `~/.zendiq/payer-mainnet.key.json`: any file `solana-keygen` writes, for example `solana-keygen new -o ~/.zendiq/payer-mainnet.key.json`. It is never generated for you. At startup the server logs the paying address and the file it came from to stderr.
 
 The server refuses to keep keys or the ledger inside `node_modules` or the npx cache, because npm deletes those folders without warning and a funded key there would be lost.
 
@@ -177,7 +177,6 @@ There the key and ledger default to `runtime/` beside the clone, as for the exam
 | `ZENDIQ_AGENT_NETWORK` | `mainnet` | Payment rail: `mainnet` or `devnet`; must match the network the API settles on. Any other value makes the paid tools refuse |
 | `AGENT_STATE_DIR` | `~/.zendiq` (npm), `runtime/` (clone) | Where the paying key and the budget ledger live |
 | `ZENDIQ_AGENT_BUDGET_FILE` | `<state dir>/budget-<network>.json` | Budget ledger every payment is reserved against. On mainnet a paid call refuses without it. See [What the budget ceiling guarantees](#what-the-budget-ceiling-guarantees) |
-| `AGENT_SECRET_SEED` | — | Mainnet paying key as a 32-byte seed array, instead of `payer-mainnet.key.json` |
 | `ZENDIQ_AGENT_KEYPAIR` | — | **Devnet only.** Solana keypair JSON that holds USDC; signs x402 payments only. Refused on mainnet |
 
 On mainnet the paying key is only loaded together with a mainnet ledger.
@@ -212,6 +211,7 @@ The ledger (`examples/budget.js`) is a hard ceiling on what the paying wallet sp
 - **What it counts.** Every x402 payment made through `ZendIQClient`: the examples, the demo runner, and the MCP server, which all share that one payment path. Each payment is reserved before it is signed and resolved afterwards. An outcome that might have been charged is counted as spent, so the ceiling over-counts rather than under-counts.
 - **On mainnet the paying key is fenced.**
   - It is loaded only by `loadAgentSigner`, from its own file, `runtime/payer-mainnet.key.json`, and only with a mainnet ledger attached; without one it throws.
+  - Advanced override for CI: `AGENT_SECRET_SEED` takes the paying key as a JSON array of exactly 32 bytes (a seed). If a key file is also present and holds a different key, nothing starts and both addresses are printed.
   - A ledger records the one key that pays against it, and a key is bound to one ledger.
   - The wallet a swap is built for (`--taker`, `ZENDIQ_TAKER_KEYPAIR`) is a separate key, and it is refused if it is the payer.
 - **More than one process may share a ledger.** Every change takes a lockfile (`<ledger>.lock`, holding the owner's PID) and re-reads the file, so two processes cannot both reserve the same remaining budget.

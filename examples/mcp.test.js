@@ -11,6 +11,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { resolveStateDir, loadAgentSigner } = require('./keys');
+const { createKeyPairSignerFromPrivateKeyBytes } = require('@solana/kit');
 
 // src/ beside examples/ in the published repo; backend/ in the monorepo.
 const SERVER = [
@@ -94,6 +95,7 @@ test('with no configuration and no wallet, the free screen answers over stdio an
     assert.equal(msgs[2].result.structuredContent.signals_resolved, '13/16');
     assert.deepEqual(screened, [{ url: '/v1/agent/analyse-token', body: { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' } }]);
     assert.match(out.stderr, /ready .* state /, 'the resolved state folder is logged to stderr');
+    assert.match(out.stderr, /payer: none \(no key at .*payer-mainnet\.key\.json/, 'no key is reported, not hidden');
   } finally {
     stub.close();
   }
@@ -125,4 +127,55 @@ test('the server refuses to start when AGENT_STATE_DIR is inside an npm package'
   assert.equal(out.code, 1);
   assert.equal(out.stdout, '', 'nothing is served');
   assert.match(out.stderr, /refusing to keep keys/);
+});
+
+const SEED_A = Array.from({ length: 32 }, (_, i) => i + 1);
+const SEED_B = Array.from({ length: 32 }, (_, i) => 200 - i);
+const addressOf = async (seed) => (await createKeyPairSignerFromPrivateKeyBytes(Uint8Array.from(seed))).address;
+const writeKey = (file, seed) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify({ seed })); };
+const LIST = [{ jsonrpc: '2.0', id: 1, method: 'tools/list' }];
+
+test('a key file and AGENT_SECRET_SEED holding different keys stop the server, naming both', async () => {
+  const stateDir = tmp();
+  writeKey(path.join(stateDir, 'payer-mainnet.key.json'), SEED_A);
+  const out = await run([], cleanEnv({ AGENT_STATE_DIR: stateDir, AGENT_SECRET_SEED: JSON.stringify(SEED_B) }), LIST);
+  assert.equal(out.code, 1);
+  assert.equal(out.stdout, '', 'nothing is served');
+  assert.match(out.stderr, /two paying keys disagree: AGENT_SECRET_SEED holds .*payer-mainnet\.key\.json holds/);
+  assert.ok(out.stderr.includes(await addressOf(SEED_A)) && out.stderr.includes(await addressOf(SEED_B)), out.stderr);
+});
+
+test('a key file and AGENT_SECRET_SEED holding the same key start, and the source is logged', async () => {
+  const stateDir = tmp();
+  writeKey(path.join(stateDir, 'payer-mainnet.key.json'), SEED_A);
+  const out = await run([], cleanEnv({ AGENT_STATE_DIR: stateDir, AGENT_SECRET_SEED: JSON.stringify(SEED_A) }), LIST);
+  assert.equal(out.code, 0, out.stderr);
+  assert.equal(JSON.parse(out.stdout).result.tools.length, 3);
+  assert.ok(out.stderr.includes(`payer: ${await addressOf(SEED_A)} (source: `), out.stderr);
+  assert.match(out.stderr, /payer-mainnet\.key\.json \(matches AGENT_SECRET_SEED\)\)/);
+});
+
+test('a key file alone is logged as the payer source', async () => {
+  const stateDir = tmp();
+  const file = path.join(stateDir, 'payer-mainnet.key.json');
+  writeKey(file, SEED_A);
+  const out = await run([], cleanEnv({ AGENT_STATE_DIR: stateDir }), LIST);
+  assert.equal(out.code, 0, out.stderr);
+  assert.ok(out.stderr.includes(`payer: ${await addressOf(SEED_A)} (source: ${file})`), out.stderr);
+});
+
+test('on devnet an explicit ZENDIQ_AGENT_KEYPAIR is never overridden by AGENT_SECRET_SEED', async () => {
+  const keyFile = path.join(tmp(), 'devnet.json');
+  writeKey(keyFile, SEED_A);
+  const base = { ZENDIQ_AGENT_NETWORK: 'devnet', AGENT_STATE_DIR: tmp(), AGENT_SECRET_SEED: JSON.stringify(SEED_B) };
+
+  const conflict = await run([], cleanEnv({ ...base, ZENDIQ_AGENT_KEYPAIR: keyFile }), LIST);
+  assert.equal(conflict.code, 1);
+  assert.equal(conflict.stdout, '');
+  assert.match(conflict.stderr, /two paying keys disagree/);
+
+  const missing = await run([], cleanEnv({ ...base, ZENDIQ_AGENT_KEYPAIR: `${keyFile}.missing` }), LIST);
+  assert.equal(missing.code, 1);
+  assert.equal(missing.stdout, '');
+  assert.match(missing.stderr, /was named as the paying key but does not exist.*Refusing to fall back to the seed/);
 });

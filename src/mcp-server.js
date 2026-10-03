@@ -21,8 +21,9 @@
  *   ZENDIQ_AGENT_BUDGET_FILE  Budget ledger every payment is reserved against. Default
  *                             <state dir>/budget-<network>.json, created by `budget init <usd>`.
  *   ZENDIQ_AGENT_KEYPAIR      Devnet only: Solana keypair JSON file used to pay. On mainnet the
- *                             paying key comes from loadAgentSigner (AGENT_STATE_DIR or
- *                             AGENT_SECRET_SEED), which refuses to hand it out without the ledger.
+ *                             paying key is <state dir>/payer-mainnet.key.json, loaded only with
+ *                             the ledger. AGENT_SECRET_SEED is a CI override; a seed that disagrees
+ *                             with a key file stops the server rather than winning silently.
  *
  * The keypair is read from disk and never leaves this process. It signs USDC payment
  * authorizations only; ZendIQ never sees it. Payments go through the same client and
@@ -324,7 +325,7 @@ async function getPaymentClient() {
     // A key read from an arbitrary path would skip the ledger check in loadAgentSigner.
     if (KEYPAIR_PATH) {
       throw new Error('ZENDIQ_AGENT_KEYPAIR is not accepted on mainnet. The paying key is loaded from '
-        + 'AGENT_STATE_DIR/payer-mainnet.key.json or AGENT_SECRET_SEED, and only with a budget ledger.');
+        + 'AGENT_STATE_DIR/payer-mainnet.key.json, and only with a budget ledger.');
     }
     if (!fs.existsSync(budgetFile)) {
       throw new Error(`no budget ledger at ${budgetFile}: every mainnet payment is reserved against its ceiling. `
@@ -597,16 +598,21 @@ function budgetCommand(args) {
   }
 }
 
-function start() {
-  // Resolved up front so a state folder inside the npm cache stops the server before any key is read.
+async function start() {
+  // Resolved up front so a state folder inside the npm cache, or two keys that disagree, stop
+  // the server before it serves anything.
   let stateDir;
+  let payer;
   try {
-    stateDir = agentModule('keys').resolveStateDir();
+    const keys = agentModule('keys');
+    stateDir = keys.resolveStateDir();
+    payer = await describePayer(keys, stateDir);
   } catch (err) {
     log(err.message);
     process.exitCode = 1;
     return;
   }
+  log(payer);
   const rl = readline.createInterface({ input: process.stdin });
   const inFlight = new Set();
 
@@ -651,6 +657,25 @@ async function respond(line) {
   } catch (err) {
     send({ jsonrpc: '2.0', id: msg.id, error: { code: err.code ?? -32603, message: err.message } });
   }
+}
+
+/**
+ * Name the key the paid tools would pay with, from the same sources they read.
+ *
+ * @param {object} keys - The keys module.
+ * @param {string} stateDir - Resolved state directory.
+ * @returns {Promise<string>} One stderr line.
+ * @throws {Error} When two key sources disagree.
+ */
+async function describePayer(keys, stateDir) {
+  if (!NETWORK) return 'payer: none (ZENDIQ_AGENT_NETWORK is invalid; paid tools will refuse)';
+  if (NETWORK === 'devnet' && !KEYPAIR_PATH) return 'payer: none (devnet needs ZENDIQ_AGENT_KEYPAIR; paid tools will refuse)';
+  const found = await keys.findPayerKey({
+    network: NETWORK, stateDir, file: NETWORK === 'devnet' ? KEYPAIR_PATH : null,
+  });
+  return found.address
+    ? `payer: ${found.address} (source: ${found.source})`
+    : `payer: none (no key at ${found.file}; the free tool works, paid tools will refuse)`;
 }
 
 if (require.main === module) {

@@ -28,7 +28,7 @@
         },
         {
           "name": "AGENT_STATE_DIR",
-          "description": "Folder holding payer-mainnet.key.json and the budget ledger. Defaults to ~/.zendiq. Never inside the npm cache.",
+          "description": "Folder holding payer-mainnet.key.json (any file solana-keygen writes) and the budget ledger. Defaults to ~/.zendiq. Never inside the npm cache.",
           "format": "filepath",
           "isRequired": false
         },
@@ -37,13 +37,6 @@
           "description": "Spend-ceiling ledger every payment is reserved against. Defaults to <state dir>/budget-<network>.json, created by: npx -y @zendiq/mcp budget init 1.00",
           "format": "filepath",
           "isRequired": false
-        },
-        {
-          "name": "AGENT_SECRET_SEED",
-          "description": "Mainnet paying key as a 32-byte seed JSON array, instead of payer-mainnet.key.json. Holds USDC only; it pays per call.",
-          "format": "string",
-          "isRequired": false,
-          "isSecret": true
         },
         {
           "name": "ZENDIQ_AGENT_KEYPAIR",
