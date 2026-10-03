@@ -46,9 +46,10 @@ npm run analyse
 **4. Run the MCP server with the same key and ledger:**
 
 ```powershell
-$env:ZENDIQ_AGENT_BUDGET_FILE = "$PWD\runtime\budget-mainnet.json"
 npm run mcp
 ```
+
+Or skip the clone entirely: `npx -y @zendiq/mcp` runs the same server from npm. See [Connect it to an agent](#connect-it-to-an-agent-mcp).
 
 The MCP server uses newline-delimited JSON-RPC over stdio. Diagnostics go to stderr so stdout remains a valid MCP transport.
 
@@ -135,31 +136,51 @@ This tool also returns the Safe / Protect / Refuse `verdict` and its `reasons`, 
 
 Payment settles in mainnet USDC from the paying wallet, and the swap is routed against mainnet liquidity for `taker`. The API accepts the paying wallet as `taker`; the examples here keep the two keys apart and refuse a taker key that is the payer.
 
-Register it in your MCP client's config (paths must be absolute):
+Register it in your MCP client's config. The package runs straight from npm, with no clone:
+
+```json
+{
+  "mcpServers": {
+    "zendiq": {
+      "command": "npx",
+      "args": ["-y", "@zendiq/mcp"]
+    }
+  }
+}
+```
+
+That is enough for `zendiq_screen_token`, which is free and needs no wallet. The paid tools need two more things, both kept in `~/.zendiq` (or `AGENT_STATE_DIR`):
+
+1. A spend ceiling: `npx -y @zendiq/mcp budget init 1.00` writes `budget-mainnet.json`. It spends nothing. `npx -y @zendiq/mcp budget` shows what has been spent.
+2. A paying key holding mainnet USDC: put a Solana keypair you control at `~/.zendiq/payer-mainnet.key.json`, or pass its 32-byte seed in `AGENT_SECRET_SEED`. It is never generated for you.
+
+The server refuses to keep keys or the ledger inside `node_modules` or the npx cache, because npm deletes those folders without warning and a funded key there would be lost.
+
+From a clone, point the client at the file instead (paths must be absolute):
 
 ```json
 {
   "mcpServers": {
     "zendiq": {
       "command": "node",
-      "args": ["/absolute/path/to/ZendIQ-Agent-API/src/mcp-server.js"],
-      "env": {
-        "ZENDIQ_AGENT_URL": "https://api.zendiq.ai",
-        "ZENDIQ_AGENT_BUDGET_FILE": "/absolute/path/to/ZendIQ-Agent-API/runtime/budget-mainnet.json"
-      }
+      "args": ["/absolute/path/to/ZendIQ-Agent-API/src/mcp-server.js"]
     }
   }
 }
 ```
 
+There the key and ledger default to `runtime/` beside the clone, as for the examples.
+
 | Env | Default | Purpose |
 |---|---|---|
 | `ZENDIQ_AGENT_URL` | `https://api.zendiq.ai` | API base URL. **The default is ZendIQ's live service** — see [Where your calls go](#where-your-calls-go) |
-| `ZENDIQ_AGENT_KEYPAIR` | — | **Devnet only.** Solana keypair JSON that holds USDC; signs x402 payments only. Refused on mainnet |
 | `ZENDIQ_AGENT_NETWORK` | `mainnet` | Payment rail: `mainnet` or `devnet`; must match the network the API settles on. Any other value makes the paid tools refuse |
-| `ZENDIQ_AGENT_BUDGET_FILE` | — | Budget ledger every payment is reserved against. **Required on mainnet**, optional on devnet. See [What the budget ceiling guarantees](#what-the-budget-ceiling-guarantees) |
+| `AGENT_STATE_DIR` | `~/.zendiq` (npm), `runtime/` (clone) | Where the paying key and the budget ledger live |
+| `ZENDIQ_AGENT_BUDGET_FILE` | `<state dir>/budget-<network>.json` | Budget ledger every payment is reserved against. On mainnet a paid call refuses without it. See [What the budget ceiling guarantees](#what-the-budget-ceiling-guarantees) |
+| `AGENT_SECRET_SEED` | — | Mainnet paying key as a 32-byte seed array, instead of `payer-mainnet.key.json` |
+| `ZENDIQ_AGENT_KEYPAIR` | — | **Devnet only.** Solana keypair JSON that holds USDC; signs x402 payments only. Refused on mainnet |
 
-On mainnet the MCP server takes its paying key the same way the examples do, from `runtime/payer-mainnet.key.json` (or `AGENT_STATE_DIR`, or `AGENT_SECRET_SEED`), and only together with a mainnet ledger.
+On mainnet the paying key is only loaded together with a mainnet ledger.
 
 Diagnostics go to stderr so stdout stays a clean JSON-RPC transport. Transport is stdio only — the standard local MCP transport every client supports; a remote/HTTP transport is not currently provided.
 
@@ -167,7 +188,7 @@ To sanity-check the wiring without a client, drive it by hand — `initialize` t
 
 ```powershell
 '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}',
-'{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | npm run --silent mcp
+'{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | npx -y @zendiq/mcp
 ```
 
 ## Autonomous agent

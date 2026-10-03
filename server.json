@@ -1,0 +1,58 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.zendiq/mcp",
+  "title": "ZendIQ",
+  "description": "Solana swap safety for agents: free token screen, $0.01 swap verdict, $0.02 built swap via x402.",
+  "websiteUrl": "https://zendiq.ai/agents/",
+  "repository": {
+    "url": "https://github.com/ZendIQ/ZendIQ-Agent-API",
+    "source": "github"
+  },
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@zendiq/mcp",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "ZENDIQ_AGENT_NETWORK",
+          "description": "Payment network: mainnet (default) or devnet. The free screen tool needs no payment.",
+          "format": "string",
+          "isRequired": false,
+          "default": "mainnet",
+          "choices": ["mainnet", "devnet"]
+        },
+        {
+          "name": "AGENT_STATE_DIR",
+          "description": "Folder holding payer-mainnet.key.json and the budget ledger. Defaults to ~/.zendiq. Never inside the npm cache.",
+          "format": "filepath",
+          "isRequired": false
+        },
+        {
+          "name": "ZENDIQ_AGENT_BUDGET_FILE",
+          "description": "Spend-ceiling ledger every payment is reserved against. Defaults to <state dir>/budget-<network>.json, created by: npx -y @zendiq/mcp budget init 1.00",
+          "format": "filepath",
+          "isRequired": false
+        },
+        {
+          "name": "AGENT_SECRET_SEED",
+          "description": "Mainnet paying key as a 32-byte seed JSON array, instead of payer-mainnet.key.json. Holds USDC only; it pays per call.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ZENDIQ_AGENT_KEYPAIR",
+          "description": "Devnet only: path to a Solana keypair JSON file holding devnet USDC.",
+          "format": "filepath",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,8 +1,29 @@
 {
-  "name": "zendiq-agent-api",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Open integration surface for ZendIQ's agent-facing Solana swap triage API",
+  "name": "@zendiq/mcp",
+  "version": "1.0.0",
+  "mcpName": "ai.zendiq/mcp",
+  "description": "MCP server for ZendIQ: screen Solana tokens for free, triage a swap ($0.01) or build it ($0.02), paid per call over x402. Zero custody.",
+  "license": "MIT",
+  "homepage": "https://zendiq.ai/agents/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZendIQ/ZendIQ-Agent-API.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ZendIQ/ZendIQ-Agent-API/issues"
+  },
+  "keywords": ["mcp", "model-context-protocol", "solana", "x402", "mev", "jupiter", "token-risk", "ai-agents"],
+  "bin": {
+    "zendiq-mcp": "src/mcp-server.js"
+  },
+  "files": [
+    "src/mcp-server.js",
+    "examples/keys.js",
+    "examples/budget.js",
+    "examples/zendiq-client.js",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "analyse": "node examples/analyse.js",
     "budget:init": "node examples/budget.js init 1.00",

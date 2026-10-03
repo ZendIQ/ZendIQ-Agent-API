@@ -18,12 +18,36 @@
  */
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { createKeyPairSignerFromPrivateKeyBytes } = require('@solana/kit');
 
 const PAYER_MAINNET_FILE = 'payer-mainnet.key.json';
 const BINDINGS_FILE = 'payer-bindings.json';
+// npm prunes its cache without warning, so a key funded there is stranded (OPS-382).
+const PACKAGE_CACHE = /[\\/](node_modules|_npx)([\\/]|$)/i;
+const INSTALLED = PACKAGE_CACHE.test(__dirname);
+
+/**
+ * Where keys and the budget ledger live: AGENT_STATE_DIR, else ~/.zendiq when running from an
+ * installed package, else runtime/ beside a clone.
+ *
+ * @param {string|null} [explicit] - A directory named by the caller.
+ * @returns {string} Absolute state directory.
+ * @throws {Error} When the directory is inside an npm package or the npx cache.
+ */
+function resolveStateDir(explicit = null) {
+  const dir = path.resolve(explicit
+    ?? process.env.AGENT_STATE_DIR
+    ?? (INSTALLED ? path.join(os.homedir(), '.zendiq') : path.join(__dirname, '..', 'runtime')));
+  if (PACKAGE_CACHE.test(dir)) {
+    throw new Error(`refusing to keep keys or the budget ledger in ${dir}: it is inside an npm package `
+      + 'or the npx cache, which npm deletes without warning, and a funded key there would be lost. '
+      + 'Set AGENT_STATE_DIR to a folder you own, or leave it unset to use ~/.zendiq.');
+  }
+  return dir;
+}
 
 /**
  * Seed bytes from a key file: this agent's `{ seed: [...] }` or a Solana CLI 64-byte array.
@@ -80,7 +104,7 @@ async function loadAgentSigner(opts = {}) {
   const network = opts.network ?? 'devnet';
   const role = opts.role ?? 'payer';
   if (role !== 'payer' && role !== 'taker') throw new Error(`unknown key role "${role}"`);
-  const stateDir = opts.stateDir ?? process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
+  const stateDir = resolveStateDir(opts.stateDir);
 
   if (network === 'mainnet' && role === 'taker') return loadMainnetTaker(opts.file, stateDir);
   if (network === 'mainnet' && opts.ledger?.state?.network !== 'mainnet') {
@@ -125,13 +149,13 @@ async function loadPayer({ network, stateDir, file: fileOpt, seedEnv: seedEnvOpt
   const seed = new Uint8Array(crypto.randomBytes(32));
   const signer = await createKeyPairSignerFromPrivateKeyBytes(seed);
   // runtime/ is gitignored, so a fresh clone does not have it.
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, JSON.stringify({
     _warning: 'THROWAWAY TEST KEY. Not for mainnet. Gitignored.',
     network,
     address: signer.address,
     seed: Array.from(seed),
-  }, null, 2));
+  }, null, 2), { mode: 0o600 });
   return { signer, address: signer.address, source: `${file} (generated)` };
 }
 
@@ -172,4 +196,4 @@ async function loadMainnetTaker(file, stateDir) {
   return { signer, address: signer.address, source: file };
 }
 
-module.exports = { loadAgentSigner, parseKeyFile, PAYER_MAINNET_FILE };
+module.exports = { loadAgentSigner, parseKeyFile, resolveStateDir, PAYER_MAINNET_FILE };

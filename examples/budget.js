@@ -347,7 +347,7 @@ if (require.main === module) {
     } else if (pinned !== 'devnet' && pinned !== 'mainnet') {
       throw new Error(`AGENT_NETWORK must be "devnet" or "mainnet", not "${process.env.AGENT_NETWORK}"`);
     }
-    const stateDir = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
+    const stateDir = require('./keys').resolveStateDir();
     const file = process.env.AGENT_BUDGET_FILE ?? path.join(stateDir, `budget-${network}.json`);
     const [cmd, arg] = process.argv.slice(2);
     if (cmd === 'init') {

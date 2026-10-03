@@ -4,6 +4,7 @@ LICENSE
 README.md
 package.json
 package-lock.json
+server.json
 .githooks\pre-push
 demo\index.html
 demo\runner.js
@@ -14,6 +15,7 @@ examples\agent.test.js
 examples\analyse.js
 examples\budget.js
 examples\budget.test.js
+examples\mcp.test.js
 examples\feed.js
 examples\keys.js
 examples\optimize.js

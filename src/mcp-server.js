@@ -2,7 +2,7 @@
 /**
  * ZendIQ Agent API — MCP server (stdio).
  *
- * Wrapper over POST /v1/agent/analyse. It exposes one tool and preserves the HTTP
+ * Wrapper over the Agent API: three tools (screen, triage, optimize). It preserves the HTTP
  * response so provenance is identical across both transports.
  *
  * Agent frameworks cache MCP tool schemas, so only the stable fields are declared in
@@ -16,7 +16,10 @@
  * Configuration:
  *   ZENDIQ_AGENT_URL          Base URL of the API. Default https://api.zendiq.ai
  *   ZENDIQ_AGENT_NETWORK      'mainnet' (default) or 'devnet'. Any other value refuses to pay.
- *   ZENDIQ_AGENT_BUDGET_FILE  Budget ledger every payment is reserved against. Required on mainnet.
+ *   AGENT_STATE_DIR           Where the paying key and budget ledger live. Default ~/.zendiq when
+ *                             run from the npm package, runtime/ beside a clone. Never the npm cache.
+ *   ZENDIQ_AGENT_BUDGET_FILE  Budget ledger every payment is reserved against. Default
+ *                             <state dir>/budget-<network>.json, created by `budget init <usd>`.
  *   ZENDIQ_AGENT_KEYPAIR      Devnet only: Solana keypair JSON file used to pay. On mainnet the
  *                             paying key comes from loadAgentSigner (AGENT_STATE_DIR or
  *                             AGENT_SECRET_SEED), which refuses to hand it out without the ledger.
@@ -34,7 +37,7 @@ const readline = require('node:readline');
 const { DEVNET_RPC_URL, MAINNET_RPC_URL } = require('@x402/svm');
 
 const PROTOCOL_FALLBACK = '2025-06-18';
-const SERVER_INFO = { name: 'zendiq-agent', version: '1.0.0' };
+const SERVER_INFO = { name: 'zendiq-agent', version: packageVersion() };
 
 const BASE_URL = (process.env.ZENDIQ_AGENT_URL ?? 'https://api.zendiq.ai').replace(/\/+$/, '');
 const ANALYSE_URL = `${BASE_URL}/v1/agent/analyse`;
@@ -254,6 +257,19 @@ const TOOL_OPTIMIZE = {
 let paymentClient = null;
 
 /**
+ * The published package's version; in the monorepo there is no such package beside src/.
+ *
+ * @returns {string} Version.
+ */
+function packageVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    if (pkg.name === '@zendiq/mcp' && pkg.version) return pkg.version;
+  } catch (_) { /* not running from the package */ }
+  return '0.0.0-dev';
+}
+
+/**
  * The agent's payment modules: examples/ beside src/ in the published repo, agent/public/ in
  * the monorepo. Required lazily, so the free tools and tests never need them.
  *
@@ -293,7 +309,7 @@ function log(...args) {
  */
 async function getPaymentClient() {
   if (paymentClient) return paymentClient;
-  const { loadAgentSigner } = agentModule('keys');
+  const { loadAgentSigner, resolveStateDir } = agentModule('keys');
   const { BudgetLedger } = agentModule('budget');
   const { ZendIQClient } = agentModule('zendiq-client');
 
@@ -302,23 +318,26 @@ async function getPaymentClient() {
   if (!NETWORK) {
     throw new Error(`ZENDIQ_AGENT_NETWORK must be "mainnet" or "devnet", not "${process.env.ZENDIQ_AGENT_NETWORK}".`);
   }
+  const stateDir = resolveStateDir();
+  const budgetFile = budgetFilePath(stateDir);
   if (NETWORK === 'mainnet') {
     // A key read from an arbitrary path would skip the ledger check in loadAgentSigner.
     if (KEYPAIR_PATH) {
       throw new Error('ZENDIQ_AGENT_KEYPAIR is not accepted on mainnet. The paying key is loaded from '
         + 'AGENT_STATE_DIR/payer-mainnet.key.json or AGENT_SECRET_SEED, and only with a budget ledger.');
     }
-    if (!BUDGET_FILE) {
-      throw new Error('ZENDIQ_AGENT_BUDGET_FILE is required on mainnet: every payment is reserved against its ceiling.');
+    if (!fs.existsSync(budgetFile)) {
+      throw new Error(`no budget ledger at ${budgetFile}: every mainnet payment is reserved against its ceiling. `
+        + 'Create one with: npx -y @zendiq/mcp budget init 1.00');
     }
-    budget = BudgetLedger.load(BUDGET_FILE, 'mainnet');
-    loaded = await loadAgentSigner({ network: 'mainnet', ledger: budget });
+    budget = BudgetLedger.load(budgetFile, 'mainnet');
+    loaded = await loadAgentSigner({ network: 'mainnet', ledger: budget, stateDir });
   } else {
     if (!KEYPAIR_PATH) {
       throw new Error('ZENDIQ_AGENT_KEYPAIR is not set. Point it at a Solana keypair JSON file holding devnet USDC.');
     }
-    if (BUDGET_FILE) budget = BudgetLedger.load(BUDGET_FILE, 'devnet');
-    loaded = await loadAgentSigner({ network: 'devnet', file: KEYPAIR_PATH, ledger: budget, create: false });
+    if (fs.existsSync(budgetFile)) budget = BudgetLedger.load(budgetFile, 'devnet');
+    loaded = await loadAgentSigner({ network: 'devnet', file: KEYPAIR_PATH, ledger: budget, create: false, stateDir });
   }
 
   log(`paying as ${loaded.address} on ${NETWORK}${budget ? ` \u00b7 ${budget.banner()}` : ' \u00b7 no budget ledger'}`);
@@ -531,34 +550,113 @@ async function handle(msg) {
   }
 }
 
-function start() {
-  const rl = readline.createInterface({ input: process.stdin });
-
-  rl.on('line', async (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-
-    let msg;
-    try {
-      msg = JSON.parse(trimmed);
-    } catch {
-      return send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
-    }
-
-    // Notifications carry no id and must never be answered.
-    if (msg.id === undefined || msg.id === null) return;
-
-    try {
-      send({ jsonrpc: '2.0', id: msg.id, result: await handle(msg) });
-    } catch (err) {
-      send({ jsonrpc: '2.0', id: msg.id, error: { code: err.code ?? -32603, message: err.message } });
-    }
-  });
-
-  rl.on('close', () => process.exit(0));
-  log(`ready — ${ANALYSE_URL} (${NETWORK ?? `invalid ZENDIQ_AGENT_NETWORK "${NETWORK_SETTING}" — paid tools will refuse`})`);
+/**
+ * The ledger `budget init` creates, unless ZENDIQ_AGENT_BUDGET_FILE names another.
+ *
+ * @param {string} stateDir - Resolved state directory.
+ * @returns {string} Ledger path.
+ */
+function budgetFilePath(stateDir) {
+  return BUDGET_FILE ?? path.join(stateDir, `budget-${NETWORK}.json`);
 }
 
-if (require.main === module) start();
+/**
+ * `budget init <usd>` creates the spend ceiling; `budget` shows it. Output goes to stderr
+ * like everything else here, so the command is safe inside an MCP client's config too.
+ *
+ * @param {string[]} args - Arguments after `budget`.
+ * @returns {number} Exit code.
+ */
+function budgetCommand(args) {
+  if (!NETWORK) {
+    log(`ZENDIQ_AGENT_NETWORK must be "mainnet" or "devnet", not "${process.env.ZENDIQ_AGENT_NETWORK}".`);
+    return 1;
+  }
+  try {
+    const { BudgetLedger } = agentModule('budget');
+    const file = budgetFilePath(agentModule('keys').resolveStateDir());
+    if (args[0] === 'init') {
+      const ceiling = Number(args[1]);
+      if (!(ceiling > 0)) {
+        log('usage: npx -y @zendiq/mcp budget init <ceiling in USD>, for example 1.00');
+        return 1;
+      }
+      const ledger = BudgetLedger.init(file, ceiling, NETWORK);
+      log(`created ${file}`);
+      log(ledger.banner());
+    } else if (!fs.existsSync(file)) {
+      log(`no budget ledger at ${file}. Create one with: npx -y @zendiq/mcp budget init 1.00`);
+      return 1;
+    } else {
+      log(`${file}: ${BudgetLedger.load(file, NETWORK).banner()}`);
+    }
+    return 0;
+  } catch (err) {
+    log(err.message);
+    return 1;
+  }
+}
 
-module.exports = { project, buildRequest, buildOptimizeRequest, paidFailureMessage, handle, start, emitDemoEvent };
+function start() {
+  // Resolved up front so a state folder inside the npm cache stops the server before any key is read.
+  let stateDir;
+  try {
+    stateDir = agentModule('keys').resolveStateDir();
+  } catch (err) {
+    log(err.message);
+    process.exitCode = 1;
+    return;
+  }
+  const rl = readline.createInterface({ input: process.stdin });
+  const inFlight = new Set();
+
+  rl.on('line', (line) => {
+    const reply = respond(line);
+    inFlight.add(reply);
+    reply.finally(() => inFlight.delete(reply));
+  });
+
+  // A client that writes its requests and closes stdin still gets every answer. The process
+  // then exits on its own: process.exit() during fetch teardown aborts Node on Windows.
+  rl.on('close', async () => {
+    await Promise.allSettled([...inFlight]);
+    process.exitCode = 0;
+  });
+  log(`ready — ${ANALYSE_URL} (${NETWORK ?? `invalid ZENDIQ_AGENT_NETWORK "${NETWORK_SETTING}" — paid tools will refuse`}) · state ${stateDir}`);
+}
+
+/**
+ * Parse one stdin line and write its reply.
+ *
+ * @param {string} line - Raw line.
+ * @returns {Promise<void>} Settles once the reply is written.
+ */
+async function respond(line) {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+
+  let msg;
+  try {
+    msg = JSON.parse(trimmed);
+  } catch {
+    send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+    return;
+  }
+
+  // Notifications carry no id and must never be answered.
+  if (msg.id === undefined || msg.id === null) return;
+
+  try {
+    send({ jsonrpc: '2.0', id: msg.id, result: await handle(msg) });
+  } catch (err) {
+    send({ jsonrpc: '2.0', id: msg.id, error: { code: err.code ?? -32603, message: err.message } });
+  }
+}
+
+if (require.main === module) {
+  const [cmd, ...rest] = process.argv.slice(2);
+  if (cmd === 'budget') process.exitCode = budgetCommand(rest);
+  else start();
+}
+
+module.exports = { project, buildRequest, buildOptimizeRequest, paidFailureMessage, handle, start, emitDemoEvent, budgetCommand };
