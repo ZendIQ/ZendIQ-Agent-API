@@ -136,7 +136,13 @@ This tool also returns the Safe / Protect / Refuse `verdict` and its `reasons`, 
 
 Payment settles in mainnet USDC from the paying wallet, and the swap is routed against mainnet liquidity for `taker`. The API accepts the paying wallet as `taker`; the examples here keep the two keys apart and refuse a taker key that is the payer.
 
-Register it in your MCP client's config. The package runs straight from npm, with no clone:
+Register it in your MCP client's config. The package runs straight from npm, with no clone. In Claude Code it is one command:
+
+```powershell
+claude mcp add zendiq -- npx -y @zendiq/mcp
+```
+
+For any other client, paste the JSON below into its user config (`~/.claude.json` for Claude Code, or the client's own config file), which connects straight away. A project `.mcp.json` works too, but the client asks you to approve the server first.
 
 ```json
 {
