@@ -62,19 +62,12 @@ const TOOL = {
   name: 'zendiq_triage_swap',
   title: 'Triage a Solana swap',
   description:
-    'Decide how to execute a proposed Solana swap before signing it. Returns Safe '
-    + '(route normally), Protect (route through a Jito bundle, with the tip to use), or '
-    + 'Refuse (do not execute). Screens the output token for rug and honeypot patterns and '
-    + 'estimates sandwich-attack exposure. Advisory only: no transaction is built, no keys '
-    + 'are handled, and nothing is executed on your behalf. Each call costs $0.01 in USDC, '
-    + 'paid automatically via x402. '
-    + 'NETWORK: payment settles in mainnet USDC on Solana. The market data analysed is '
-    + 'mainnet, so the verdict is about real liquidity. '
-    + 'The full risk breakdown behind the verdict — token risk '
-    + 'factors, sandwich exposure detail, and route economics — is available on the HTTP '
-    + 'endpoint POST /v1/agent/analyse. The HTTP endpoint POST /v1/agent/optimize ($0.02) '
-    + 'additionally returns an unsigned mainnet transaction, so its taker must be a mainnet '
-    + 'wallet holding the input amount and SOL for fees and rent.',
+    'Call before signing a Solana swap, to decide whether and how to trade it. Returns Safe '
+    + '(trade normally), Protect (trade through a Jito bundle, with the tip to use) or Refuse '
+    + '(do not trade), with plain-language reasons, the output token\'s risk score, the sandwich '
+    + 'exposure for this trade size, and the route. Builds no transaction and handles no keys. '
+    + '$0.01 in USDC per call, paid via x402 on Solana mainnet; the market data is mainnet. '
+    + 'To get the transaction itself, call zendiq_optimize_swap.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -123,13 +116,11 @@ const TOOL_SCREEN = {
   name: 'zendiq_screen_token',
   title: 'Screen a Solana token',
   description:
-    'Screen a single Solana token by mint address, before you have a trade size. Returns '
-    + 'the token risk score (rug / honeypot / mint & freeze authority / holder concentration '
-    + 'signals) with a signals-resolved coverage figure and cache age. Free and rate-limited '
-    + '— the cheap "should I even look at this?" call for scanning many mints. No wallet or '
-    + 'payment is needed; the token data is mainnet. To score a '
-    + 'specific trade (sandwich exposure, route, fees) use zendiq_triage_swap, which returns '
-    + 'this same token score inline, so screening first is optional, never required.',
+    'Call first, whenever you are considering a Solana token and have no trade yet: is this '
+    + 'mint safe to touch? Returns a 0-100 risk score and level, the 16 checks behind it '
+    + '(authorities, holders, rug flags, LP lock, creator history and more), coverage as '
+    + 'signals_resolved, and cache age. Treat an unknown check as unknown, never as safe. Free, '
+    + 'no wallet or payment; mainnet data. To judge a specific trade, call zendiq_triage_swap.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -165,25 +156,12 @@ const TOOL_OPTIMIZE = {
   name: 'zendiq_optimize_swap',
   title: 'Build an optimized Solana swap',
   description:
-    'Build an executable Solana swap once you have already decided to trade. Returns an '
-    + 'unsigned swap transaction — a Jupiter route, or a direct venue when it beats Jupiter '
-    + 'after costs — plus the structured plan and itemised net-benefit '
-    + 'arithmetic behind it, so you can verify the bytes against the stated intent before '
-    + 'signing. Zero custody: the transaction is never signed here — you sign and submit it '
-    + 'with your own wallet. A build that fails charges nothing. Each successful call costs '
-    + '$0.02 in USDC, paid automatically via x402. '
-    + 'Use this when the decision to trade is already made and the open question is how to '
-    + 'execute it well. It also returns the Safe / Protect / Refuse verdict with its reasons, and '
-    + 'still builds the transaction on a Refuse: read `verdict` before signing, and do not sign a '
-    + 'Refuse unless you mean to trade against ZendIQ\'s verdict. If the open question is still '
-    + 'whether to trade at all, zendiq_triage_swap answers it for $0.01 without building anything. '
-    + 'NETWORK: payment settles in mainnet USDC on Solana, from the paying wallet. The swap is '
-    + 'built against MAINNET liquidity for `taker`, a wallet that must hold the input amount and SOL '
-    + 'for the network fee and token account rent (a gasless Jupiter Ultra fill is exempt from '
-    + 'the SOL). A taker that cannot fund the trade gets 422 taker_insufficient_balance, '
-    + 'uncharged, naming the token and the shortfall. The paying wallet and the taker may be '
-    + 'the same wallet or two different ones; the returned transaction is only submittable by '
-    + 'the taker.',
+    'Call once you have decided to trade and need the transaction. Returns an unsigned swap '
+    + 'transaction (the Jupiter route, or a direct venue or Jito bundle that beats it after every '
+    + 'cost), the plan to verify it against, submit instructions, a simulation, itemised '
+    + 'netBenefit, and the same verdict as zendiq_triage_swap. A Refuse is still built: read '
+    + 'verdict before signing. You sign and submit it. $0.02 USDC via '
+    + 'x402 on Solana mainnet; a failed build is free. taker must hold the input and SOL for fees.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -200,8 +178,9 @@ const TOOL_OPTIMIZE = {
         description:
           'Base58 public key the swap is built for. Must be a mainnet wallet holding the '
           + 'input amount and SOL for fees and rent (a gasless Ultra fill is exempt from the '
-          + 'SOL). Not the paying wallet. The returned transaction is only submittable by this '
-          + 'account.',
+          + 'SOL). Can be the paying wallet or a different one. The returned transaction is only '
+          + 'submittable by this account. A taker that cannot fund the trade gets '
+          + '422 taker_insufficient_balance, uncharged, naming the token and the shortfall.',
       },
       slippageBps: {
         type: 'integer',
@@ -253,7 +232,10 @@ const TOOL_OPTIMIZE = {
         properties: {
           expectedMevLossUsd: { type: ['number', 'null'] },
           zendiqFeeUsd: { type: ['number', 'null'] },
-          netUsd: { type: ['number', 'null'] },
+          jitoTipUsd: { type: ['number', 'null'] },
+          jupiterPlatformFeeUsd: { type: ['number', 'null'], description: "Jupiter's own fee on this trade; 0 off Jupiter Ultra, null when it could not be priced." },
+          netUsd: { type: ['number', 'null'], description: 'expectedMevLossUsd − zendiqFeeUsd − jitoTipUsd − jupiterPlatformFeeUsd, on routes that claim MEV protection; see netUsdBasis when null.' },
+          netUsdBasis: { type: 'string' },
         },
       },
       simulation: {

@@ -62,7 +62,7 @@ This is **build-only**: it pays $0.02 in USDC and signs nothing, and you cannot 
 
 Set variables in your shell. Nothing in this repository loads a `.env` file; `.env.example` only lists the variables for reference.
 
-The first call after the hosted API has been idle can take 30 seconds or more while it wakes; later calls are fast. A slow first call is not a failure.
+The first scan of a token typically takes 1–5 s and at most about 12 s; a token scanned by anyone in the last 60 s comes back in under a second. Details: [How long a call takes](https://zendiq.ai/agents/#latency).
 
 A paid call can also hold its response for up to 90 seconds while payment settlement is confirmed on chain, which happens when the facilitator cannot confirm the transfer itself. Allow at least 120 seconds on `/analyse` and `/optimize`. MCP hosts often time out a tool call sooner; raise that limit if your host allows it. Details: [Settlement can hold the response](https://zendiq.ai/agents/#settlement).
 
@@ -97,13 +97,13 @@ No ZendIQ credentials ship in this repository. The paying key is yours, signs yo
 
 The server speaks the Model Context Protocol over stdio (newline-delimited JSON-RPC), so any MCP-capable client — Claude Desktop, Cursor, Cline, or your own harness — can call it directly. It exposes three tools, one per workflow stage. They are independent entry points, not a required sequence: call whichever matches the question you actually have.
 
-**`zendiq_screen_token`** — **screen** stage. Screen a token by mint alone, *before* you have a trade size (an agent scanning many fresh mints has none). **Free and rate-limited**, cacheable across callers. Returns the token risk score, its signal breakdown, `signals_resolved` coverage, and a `cache` block (`hit`, `ageSeconds`, `observedAt`) so you can decide whether to force fresh.
+**`zendiq_screen_token`** — **screen** stage. Call it first, whenever you are considering a token and have no trade yet (an agent scanning many fresh mints has none). **Free and rate-limited**, cacheable across callers. Returns the token risk score, its signal breakdown, `signals_resolved` coverage, and a `cache` block (`hit`, `ageSeconds`, `observedAt`) so you can decide whether to force fresh.
 
 | Input | Type | Required | Description |
 |---|---|---|---|
 | `mint` | string | yes | Base58 mint of the token to screen |
 
-**`zendiq_triage_swap`** — **decide** stage. Decide how to execute a specific swap before signing. Paid. Returns the **full token score inline** (so screening first is optional, never required), plus sandwich exposure and the recommended execution.
+**`zendiq_triage_swap`** — **decide** stage. Call it before signing a swap, to decide whether and how to trade it. Paid. Returns the **full token score inline** (so screening first is optional, never required), plus sandwich exposure, the route and the recommended execution. Builds no transaction.
 
 | Input | Type | Required | Description |
 |---|---|---|---|
@@ -120,7 +120,7 @@ Output (`structuredContent`):
 
 The full risk breakdown (token-risk factors, sandwich exposure, provenance fingerprint) is returned unchanged alongside these committed fields, so the MCP result is byte-identical to the HTTP `/analyse` response. Each call costs `$0.01` in USDC, paid automatically via x402 using the configured keypair.
 
-**`zendiq_optimize_swap`** — **execute** stage. Build an executable swap once the decision to trade is already made. Paid. Returns an unsigned swap transaction (a Jupiter route, or a direct venue when it beats Jupiter after costs) plus the `plan` and itemised `netBenefit` arithmetic behind it, so the bytes can be checked against the stated intent before signing. Zero custody — nothing is signed here.
+**`zendiq_optimize_swap`** — **execute** stage. Call it once you have decided to trade and need the transaction. Paid. Returns an unsigned swap transaction (the Jupiter route, or a direct venue or Jito bundle that beats it after every cost by more than 0.1% of the trade, capped at $1), the `plan` to verify it against, `submit` instructions, a simulation, an itemised `netBenefit`, and the same verdict as `zendiq_triage_swap`. Zero custody — nothing is signed here.
 
 | Input | Type | Required | Description |
 |---|---|---|---|
@@ -304,7 +304,9 @@ The venue is chosen by risk, so read `plan.venue` rather than assuming one. **Ju
 
 A direct venue is quoted alongside and replaces the Jupiter route only when it beats it after every cost: priority fee, Jito tip, expected sandwich loss, and for a bundle its landing risk (an assumed 5% chance of paying for a rebuild). It must win by a margin of 0.1% of the trade, capped at $1: enough that quote noise cannot flip the venue, small enough that a real saving still wins. Unprotected **Raydium** competes only on a Safe verdict. The Jito bundle venues (**Raydium + Jito**, **Jupiter Swap + Jito**) compete on every verdict; on Safe they step aside while ZendIQ's shared Jito submission budget is busy, so protected trades keep it. `plan.venueDecision` shows every candidate's arithmetic; often the answer is Jupiter.
 
-**Submission differs by venue** — follow the returned `submit` object rather than hardcoding a path. On `jupiter_ultra`, sign `transaction` and POST `{ signedTransaction, requestId }` to `https://lite-api.jup.ag/ultra/v1/execute`; submitting through your own RPC instead forfeits Ultra's MEV protection and invalidates the `netBenefit` figures. On `jupiter_swap` and `raydium` there is no `requestId` (it is `null`) and no `/execute` step — sign and send to your own RPC, with the priority fee already inside the transaction. Send a `raydium` transaction promptly: Raydium embeds its own blockhash and `submit.lastValidBlockHeight` is `null`.
+**Submission differs by venue** — follow the returned `submit` object rather than hardcoding a path. On `jupiter_ultra`, sign `transaction` and POST `{ signedTransaction, requestId }` to `https://lite-api.jup.ag/ultra/v1/execute`; submitting through your own RPC instead forfeits Ultra's MEV protection and invalidates the `netBenefit` figures. On `jupiter_swap` and `raydium` there is no `requestId` (it is `null`) and no `/execute` step — sign and send to your own RPC, with the priority fee already inside the transaction. Send a `raydium` transaction promptly: Raydium embeds its own blockhash and `submit.lastValidBlockHeight` is `null`. On a Jito bundle venue (`submit.method: "jito_bundle"`), sign and POST `{ "signedTransaction": "<base64>" }` to `/v1/agent/bundle` on this API (free): ZendIQ forwards those exact bytes to Jito and reports landing. Never send a bundle transaction to an RPC yourself; it would sit in the public mempool and still pay the tip.
+
+`netBenefit.netUsd = expectedMevLossUsd − zendiqFeeUsd − jitoTipUsd − jupiterPlatformFeeUsd`: the sandwich loss the route avoids, less what you pay ZendIQ, Jito and Jupiter for it. It is stated only on routes that claim MEV protection (Jupiter Ultra and the bundle venues). `jupiterPlatformFeeUsd` is Jupiter's own fee on an Ultra trade (0–50 bps by pair, 2 bps on SOL–USDC; already inside the quoted amounts) and `0` elsewhere. The priority fee is itemised but not netted. When a cost cannot be priced, `netUsd` is `null` and `netUsdBasis` says why.
 
 `/optimize` returns the same `verdict` (Safe / Protect / Refuse) as `/analyse` but does not refuse to build: a `Refuse` still comes back with a transaction, even for a token that scores `CRITICAL`. Read `verdict` and `tokenRisk` before signing, and do not sign a `Refuse` unless you mean to trade against it.
 

@@ -324,7 +324,7 @@
             }
           },
           "evidence_fingerprint": { "type": "string", "description": "16-character SHA-256 prefix over the evidence used." },
-          "signals_resolved": { "type": "string", "description": "Coverage: resolved signals over the total, e.g. \"11/16\" means five came back unknown. An unknown never lowers the score; most add a `…: unavailable` factor with +5 caution points. Treat unknown as unknown, never as safe: a LOW score with low coverage means few checks were answered, not that the token is low-risk.", "examples": ["14/16"] },
+          "signals_resolved": { "type": "string", "description": "Coverage: resolved signals over the total, e.g. \"11/16\" means five came back unknown. An unknown never lowers the score; most add a `…: unavailable` factor with +5 caution points. The exception is a short list of established assets (regulated stablecoins, established protocol tokens, liquid staking tokens), named by an asset-class factor such as `Regulated stablecoin`: checks that do not apply to that class are not scored, so an unknown on one of them adds nothing. Treat unknown as unknown, never as safe: a LOW score with low coverage means few checks were answered, not that the token is low-risk.", "examples": ["14/16"] },
           "signals": {
             "type": "array",
             "description": "Always all 16 signals, in a fixed order, whether or not each one resolved. A signal that could not be read is present with status \"unknown\" and a reason, never omitted and never silently downgraded to a pass. The example below is illustrative and shows one of every status; it is not a live reading of any particular token.",
@@ -579,7 +579,9 @@
                 "properties": {
                   "type": { "type": ["string", "null"] },
                   "swapType": { "type": ["string", "null"] },
-                  "hops": { "type": ["integer", "null"] },
+                  "hops": { "type": ["integer", "null"], "description": "Sequential swaps in the route. A hop split across several pools counts once; see legs." },
+                  "legs": { "type": ["integer", "null"], "description": "Pool legs in the route plan. Above hops when a hop is split across pools." },
+                  "split": { "type": ["boolean", "null"], "description": "True when at least one hop is split across pools. Null when the route plan carries no mints to tell." },
                   "priceImpactPct": { "type": ["number", "null"] },
                   "slippageBps": { "type": ["integer", "null"] },
                   "inAmount": { "type": ["string", "null"] },
@@ -594,7 +596,7 @@
               "degraded": {
                 "type": ["array", "null"],
                 "items": { "type": "string" },
-                "description": "Null when every sub-analysis resolved. Otherwise a non-empty array of \"source:reason\" strings naming what did not. Test for null rather than comparing against true. Check it before trusting the verdict at full confidence.",
+                "description": "Null when all three sub-analyses (token screening, route, sandwich exposure) produced a result, even if some of the sixteen token checks came back unknown: per-check coverage is in signals_resolved, not here. Otherwise a non-empty array of \"source:reason\" strings naming what did not. Test for null rather than comparing against true. Check it before trusting the verdict at full confidence.",
                 "examples": [["token_screening:unavailable", "sandwich_exposure:unavailable"]]
               },
               "disclaimer": { "type": "string" },
@@ -773,7 +775,9 @@
                       "type": { "type": ["string", "null"] },
                       "swapType": { "type": ["string", "null"] },
                       "router": { "type": ["string", "null"], "description": "jupiter_ultra only. The router Ultra filled the order through, as Ultra names it (for example metis, jupiterz, okx)." },
-                      "hops": { "type": ["integer", "null"] },
+                      "hops": { "type": ["integer", "null"], "description": "Sequential swaps in the route. A hop split across several pools counts once; see legs." },
+                      "legs": { "type": ["integer", "null"], "description": "Pool legs in the route plan. Above hops when a hop is split across pools." },
+                      "split": { "type": ["boolean", "null"], "description": "True when at least one hop is split across pools. Null when the route plan carries no mints to tell." },
                       "inAmount": { "type": ["string", "null"], "description": "The amount actually quoted. On raydium with a SOL input this is below the requested amount by solReserveLamports." },
                       "outAmount": { "type": ["string", "null"] },
                       "priceImpactPct": { "type": ["number", "null"] },
@@ -814,13 +818,27 @@
                     "type": ["string", "number", "null"],
                     "description": "A string on jupiter_ultra, where the fee is venue-managed; its decoded amount is in plan.priorityFee. On other venues, the applied fee in USD, or null when no SOL price was available."
                   },
-                  "jitoTipUsd": { "type": "number" },
+                  "jitoTipUsd": { "type": ["number", "null"], "description": "0 when no tip is paid. Null when a tip is paid but no SOL price was available." },
+                  "jupiterPlatformFeeUsd": { "type": ["number", "null"], "description": "Jupiter's own fee on this trade, in USD. On jupiter_ultra it is the fee Ultra reports (0–50 bps by pair; for example 2 bps on SOL–USDC). It is already inside the quoted amounts, so it is not deducted from the route comparison again. 0 on every other venue, where no Jupiter fee applies. Null when Jupiter did not report it or it could not be priced: unknown, never zero." },
+                  "jupiterPlatformFee": {
+                    "type": ["object", "null"],
+                    "description": "How jupiterPlatformFeeUsd was derived.",
+                    "properties": {
+                      "feeBps": { "type": ["number", "null"] },
+                      "feeMint": { "type": ["string", "null"] },
+                      "side": { "type": ["string", "null"], "enum": ["input", "output", null], "description": "Which leg of the trade the fee is taken from." },
+                      "amount": { "type": ["string", "null"], "description": "Raw fee amount in feeMint's atomic units." },
+                      "usd": { "type": ["number", "null"] },
+                      "source": { "type": "string", "enum": ["quote", "not_applicable"] },
+                      "note": { "type": "string" }
+                    }
+                  },
                   "zendiqFeeUsd": { "type": ["number", "null"] },
-                  "netUsd": { "type": ["number", "null"], "description": "Read netUsdBasis before treating null as a failure." },
+                  "netUsd": { "type": ["number", "null"], "description": "netUsd = expectedMevLossUsd − zendiqFeeUsd − jitoTipUsd − jupiterPlatformFeeUsd: the sandwich loss this route avoids, less what you pay ZendIQ, Jito and Jupiter for it. Stated only on routes that claim MEV protection (jupiter_ultra and the Jito bundle venues). The priority fee is itemised above but not netted. Read netUsdBasis before treating null as a failure." },
                   "netUsdBasis": {
                     "type": "string",
-                    "description": "Why netUsd has the value it does. not_claimed_on_this_route = null by design: the route provides no MEV protection, so no avoided-loss credit is claimed. unavailable_no_sol_price = a bundle's Jito tip could not be priced, so no net is stated.",
-                    "enum": ["computed", "unavailable_no_mev_estimate", "not_claimed_on_this_route", "unavailable_no_sol_price"]
+                    "description": "Why netUsd has the value it does. not_claimed_on_this_route = null by design: the route provides no MEV protection, so no avoided-loss credit is claimed. unavailable_no_mev_estimate = no sandwich estimate was available. unavailable_no_sol_price = a bundle's Jito tip could not be priced. unavailable_platform_fee = Jupiter's fee could not be priced. In every unavailable case no net is stated.",
+                    "enum": ["computed", "unavailable_no_mev_estimate", "not_claimed_on_this_route", "unavailable_no_sol_price", "unavailable_platform_fee"]
                   },
                   "note": { "type": "string" }
                 }
@@ -923,8 +941,9 @@
           "rateLimits": {
             "type": "object",
             "properties": {
-              "perIpPerMinute": { "type": "integer" },
-              "perPayerPerMinute": { "type": "integer" },
+              "perIpPerMinute": { "type": "integer", "description": "Paid endpoints, per IP." },
+              "perPayerPerMinute": { "type": "integer", "description": "Paid endpoints, per paying wallet." },
+              "screenPerIpPerMinute": { "type": "integer", "description": "The free /analyse-token, per IP. Counted separately from the paid limits." },
               "note": { "type": "string" }
             }
           },

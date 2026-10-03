@@ -142,12 +142,16 @@ function printVenueDecision(d) {
   const sim = o.simulation ?? {};
   const simDetail = sim.unitsConsumed ? ` (${sim.unitsConsumed} CU)` : (sim.reason ? ` (${sim.reason})` : '');
   console.log(`  simulation   ${sim.status}${simDetail}`);
+  const nb = o.netBenefit ?? {};
+  const jpf = nb.jupiterPlatformFee;
+  console.log(`  jupiter fee  ${nb.jupiterPlatformFeeUsd != null ? `$${nb.jupiterPlatformFeeUsd.toFixed(4)}` : '— unknown'}${jpf?.feeBps != null ? ` (${jpf.feeBps} bps${jpf.side ? `, ${jpf.side} token` : ''})` : ''}`);
   const netBasis = {
     not_claimed_on_this_route: 'not claimed on this route',
     unavailable_no_mev_estimate: 'no MEV estimate available',
     unavailable_no_sol_price: 'Jito tip could not be priced',
-  }[o.netBenefit?.netUsdBasis] ?? 'unavailable';
-  console.log(`  net benefit  ${o.netBenefit?.netUsd != null ? `$${o.netBenefit.netUsd.toFixed(4)}` : `— ${netBasis}`}`);
+    unavailable_platform_fee: 'Jupiter fee could not be priced',
+  }[nb.netUsdBasis] ?? 'unavailable';
+  console.log(`  net benefit  ${nb.netUsd != null ? `$${nb.netUsd.toFixed(4)}` : `— ${netBasis}`}`);
   console.log(`  transaction  ${typeof o.transaction === 'string' ? `${Buffer.from(o.transaction, 'base64').length} bytes (unsigned)` : 'none'}`);
   console.log(`  custody      ${o.custody}`);
 
