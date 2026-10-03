@@ -84,7 +84,7 @@ npm run analyse
 npm run mcp
 ```
 
-Or skip the clone entirely: `npx -y @zendiq/mcp` runs the same server from npm. See [Connect it to an agent](#connect-it-to-an-agent-mcp).
+Or skip the clone entirely: `npx -y @zendiq/mcp@latest` runs the same server from npm. See [Connect it to an agent](#connect-it-to-an-agent-mcp).
 
 The MCP server uses newline-delimited JSON-RPC over stdio. Diagnostics go to stderr so stdout remains a valid MCP transport.
 
@@ -174,7 +174,7 @@ Payment settles in mainnet USDC from the paying wallet, and the swap is routed a
 Register it in your MCP client's config. The package runs straight from npm, with no clone. In Claude Code it is one command:
 
 ```bash
-claude mcp add --scope user zendiq -- npx -y @zendiq/mcp
+claude mcp add --scope user zendiq -- npx -y @zendiq/mcp@latest
 ```
 
 For any other client, paste the JSON below into its user config (`~/.claude.json` for Claude Code, or the client's own config file), which connects straight away. A project `.mcp.json` works too, but the client asks you to approve the server first.
@@ -184,7 +184,7 @@ For any other client, paste the JSON below into its user config (`~/.claude.json
   "mcpServers": {
     "zendiq": {
       "command": "npx",
-      "args": ["-y", "@zendiq/mcp"]
+      "args": ["-y", "@zendiq/mcp@latest"]
     }
   }
 }
@@ -192,7 +192,7 @@ For any other client, paste the JSON below into its user config (`~/.claude.json
 
 That is enough for `zendiq_screen_token`, which is free and needs no wallet. The paid tools need two more things, both kept in `~/.zendiq` (or `AGENT_STATE_DIR`):
 
-1. A spend ceiling: `npx -y @zendiq/mcp budget init 1.00` writes `budget-mainnet.json`. It spends nothing. `npx -y @zendiq/mcp budget` shows what has been spent.
+1. A spend ceiling: `npx -y @zendiq/mcp@latest budget init 1.00` writes `budget-mainnet.json`. It spends nothing. `npx -y @zendiq/mcp@latest budget` shows what has been spent.
 2. A paying key holding mainnet USDC at `~/.zendiq/payer-mainnet.key.json`: any file `solana-keygen` writes, for example `solana-keygen new -o ~/.zendiq/payer-mainnet.key.json`. It is never generated for you. At startup the server logs the paying address and the file it came from to stderr.
 
 The server refuses to keep keys or the ledger inside `node_modules` or the npx cache, because npm deletes those folders without warning and a funded key there would be lost.
@@ -228,14 +228,14 @@ To sanity-check the wiring without a client, drive it by hand — `initialize` t
 
 ```bash
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | npx -y @zendiq/mcp
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | npx -y @zendiq/mcp@latest
 ```
 
 PowerShell:
 
 ```powershell
 '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}',
-'{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | npx -y @zendiq/mcp
+'{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | npx -y @zendiq/mcp@latest
 ```
 
 ## Autonomous agent
