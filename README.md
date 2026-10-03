@@ -26,26 +26,61 @@ This repository contains no extension analytics, user telemetry, production depl
 
 ## Quickstart
 
-Everything below runs on your machine. The only calls to ZendIQ are the scoring and `/optimize` requests to the hosted API; no URL needs setting for those.
+**Start free, with nothing installed.** Screening a token needs no wallet, no payment, no key and no clone. This returns a real risk score, usually in a few seconds:
+
+```bash
+curl -s -X POST https://api.zendiq.ai/v1/agent/analyse-token \
+  -H "content-type: application/json" \
+  -d '{"mint":"DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}'
+```
+
+PowerShell:
+
+```powershell
+Invoke-RestMethod -Method Post https://api.zendiq.ai/v1/agent/analyse-token `
+  -ContentType 'application/json' `
+  -Body '{"mint":"DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}' | Select-Object -ExpandProperty tokenRisk
+```
+
+Python (standard library only):
+
+```python
+import json, urllib.request
+
+req = urllib.request.Request(
+    "https://api.zendiq.ai/v1/agent/analyse-token",
+    data=json.dumps({"mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}).encode(),
+    headers={"content-type": "application/json"},
+)
+with urllib.request.urlopen(req, timeout=30) as resp:
+    body = json.load(resp)
+
+risk = body["tokenRisk"]
+print(risk["symbol"], risk["score"], risk["level"], "signals", body["signals_resolved"])
+```
+
+The response holds `tokenRisk` (score and level), the 16 `signals` behind it with coverage in `signals_resolved`, and an `analysisId` that `/optimize` can reuse for 60 s.
+
+**Paid calls.** The steps below run on your machine. The only calls to ZendIQ are the scoring and `/optimize` requests to the hosted API; no URL needs setting for those. The `npm` commands are the same in bash and PowerShell.
 
 **1. Install and set a local spend ceiling.** `budget:init` reads the payment network from the API (`GET /v1/agent`, free) and writes a `$1.00` ledger for it under `runtime/`. It spends nothing. On mainnet every payment is reserved against this ceiling, and nothing here pays without one.
 
-```powershell
+```bash
 npm ci
 npm run budget:init
 ```
 
 **2. Provide and fund the paying key.** This code never generates or writes a mainnet key. Put a Solana keypair you control at `runtime/payer-mainnet.key.json`: any file `solana-keygen` writes, for example `solana-keygen new -o runtime/payer-mainnet.key.json`. Fund its address with a little USDC on Solana mainnet. No SOL is needed: the x402 facilitator pays the payment's network fee. $1 covers 100 calls at `$0.01`. Use a dedicated wallet, because the ledger only bounds what is paid through this code.
 
-**3. Make one paid call** (`$0.01`):
+**3. Make one paid call** (`$0.01` in mainnet USDC):
 
-```powershell
+```bash
 npm run analyse
 ```
 
 **4. Run the MCP server with the same key and ledger:**
 
-```powershell
+```bash
 npm run mcp
 ```
 
@@ -55,7 +90,7 @@ The MCP server uses newline-delimited JSON-RPC over stdio. Diagnostics go to std
 
 **5. Optional: try `/optimize` build-only.** `/optimize` builds a mainnet swap for a `taker`. The `taker` is only a public key and nothing is signed, so any funded mainnet address shows the full plan, simulation and venue decision. For the default 0.003 SOL swap, pick one holding a little more than 0.003 SOL:
 
-```powershell
+```bash
 npm run optimize -- --taker <ANY_FUNDED_MAINNET_ADDRESS>
 ```
 
@@ -138,7 +173,7 @@ Payment settles in mainnet USDC from the paying wallet, and the swap is routed a
 
 Register it in your MCP client's config. The package runs straight from npm, with no clone. In Claude Code it is one command:
 
-```powershell
+```bash
 claude mcp add --scope user zendiq -- npx -y @zendiq/mcp
 ```
 
@@ -191,6 +226,13 @@ Diagnostics go to stderr so stdout stays a clean JSON-RPC transport. Transport i
 
 To sanity-check the wiring without a client, drive it by hand — `initialize` then `tools/list` need no keypair or payment:
 
+```bash
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | npx -y @zendiq/mcp
+```
+
+PowerShell:
+
 ```powershell
 '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}',
 '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | npx -y @zendiq/mcp
@@ -200,7 +242,7 @@ To sanity-check the wiring without a client, drive it by hand — `initialize` t
 
 The complete test agent is public under `examples/`. It watches DexScreener's live Solana boost feed, enriches each candidate, pays ZendIQ for a verdict, and records whether it would refuse, protect, or route the trade normally.
 
-```powershell
+```bash
 npm run budget:init
 npm run feed
 npm run watch
@@ -241,15 +283,17 @@ The ledger (`examples/budget.js`) is a hard ceiling on what the paying wallet sp
 
 `/analyse` is advisory. `/optimize` goes one step further: it returns an **unsigned** swap transaction, with the venue, priority fee and MEV posture chosen from the same risk model and a net-benefit comparison across venues — plus the plan, an on-chain simulation, and the net-benefit arithmetic. You verify the bytes against the stated plan, then sign and submit with your own wallet. ZendIQ never holds a key.
 
-```powershell
+```bash
 npm run budget:init
 # Stop at simulation — pays $0.02 USDC, prints the plan + simulation, signs nothing:
 npm run optimize -- --taker <YOUR_MAINNET_PUBKEY>
 
 # Real landing — signs the returned tx and submits it as the response's submit block directs:
-$env:ZENDIQ_TAKER_KEYPAIR = 'C:\path\to\mainnet-keypair.json'
+export ZENDIQ_TAKER_KEYPAIR=/path/to/mainnet-keypair.json
 npm run optimize -- --taker <YOUR_MAINNET_PUBKEY> --execute
 ```
+
+In PowerShell, set the key path with `$env:ZENDIQ_TAKER_KEYPAIR = 'C:\path\to\mainnet-keypair.json'` instead of `export`.
 
 The swap routes on **mainnet**, so `--taker` must be a wallet that holds the input amount and SOL for fees and rent; the x402 payment is a separate USDC transfer from the paying wallet. By default the example **stops at simulation and spends nothing on-chain** — pass `--execute` (with `ZENDIQ_TAKER_KEYPAIR`) to sign and land a real swap. On `jupiter_ultra` the example submits through Jupiter's `/execute`; on `jupiter_swap` it sends through `SOLANA_RPC_URL`, which defaults to the public mainnet RPC; on a Jito bundle venue it posts the signed transaction to ZendIQ's `/v1/agent/bundle` and polls until it lands. The response carries the unsigned `transaction`, the `plan`, the `submit` instructions for the chosen venue, the `simulation` result, and the `netBenefit` breakdown — everything needed to confirm the transaction matches the stated intent before signing.
 
@@ -269,13 +313,13 @@ A local spectator view that renders one real swap-triage call as a live, animate
 
 Start the visualizer in one terminal:
 
-```powershell
+```bash
 npm run demo
 ```
 
 Open `http://127.0.0.1:4173`, then in a second terminal:
 
-```powershell
+```bash
 npm run demo:run -- --mint DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 --taker <YOUR_MAINNET_PUBKEY>
 ```
 
