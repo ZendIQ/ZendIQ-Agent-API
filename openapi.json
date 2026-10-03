@@ -819,6 +819,7 @@
                     "description": "A string on jupiter_ultra, where the fee is venue-managed; its decoded amount is in plan.priorityFee. On other venues, the applied fee in USD, or null when no SOL price was available."
                   },
                   "jitoTipUsd": { "type": ["number", "null"], "description": "0 when no tip is paid. Null when a tip is paid but no SOL price was available." },
+                  "priorityFeeUsd": { "type": ["number", "null"], "description": "The priority fee your taker pays, decoded from the transaction and priced in USD. 0 on a bundle (none is set) and on a gasless fill (Jupiter pays it). Null when it could not be read or priced." },
                   "jupiterPlatformFeeUsd": { "type": ["number", "null"], "description": "Jupiter's own fee on this trade, in USD. On jupiter_ultra it is the fee Ultra reports (0–50 bps by pair; for example 2 bps on SOL–USDC). It is already inside the quoted amounts, so it is not deducted from the route comparison again. 0 on every other venue, where no Jupiter fee applies. Null when Jupiter did not report it or it could not be priced: unknown, never zero." },
                   "jupiterPlatformFee": {
                     "type": ["object", "null"],
@@ -834,11 +835,11 @@
                     }
                   },
                   "zendiqFeeUsd": { "type": ["number", "null"] },
-                  "netUsd": { "type": ["number", "null"], "description": "netUsd = expectedMevLossUsd − zendiqFeeUsd − jitoTipUsd − jupiterPlatformFeeUsd: the sandwich loss this route avoids, less what you pay ZendIQ, Jito and Jupiter for it. Stated only on routes that claim MEV protection (jupiter_ultra and the Jito bundle venues). The priority fee is itemised above but not netted. Read netUsdBasis before treating null as a failure." },
+                  "netUsd": { "type": ["number", "null"], "description": "netUsd = expectedMevLossUsd − zendiqFeeUsd − jitoTipUsd − jupiterPlatformFeeUsd − priorityFeeUsd: the sandwich loss this route avoids, less every fee you pay to execute it. Stated only on routes that claim MEV protection (jupiter_ultra and the Jito bundle venues). The 5,000-lamport base signature fee is paid on every route alike and is not included. Read netUsdBasis before treating null as a failure." },
                   "netUsdBasis": {
                     "type": "string",
-                    "description": "Why netUsd has the value it does. not_claimed_on_this_route = null by design: the route provides no MEV protection, so no avoided-loss credit is claimed. unavailable_no_mev_estimate = no sandwich estimate was available. unavailable_no_sol_price = a bundle's Jito tip could not be priced. unavailable_platform_fee = Jupiter's fee could not be priced. In every unavailable case no net is stated.",
-                    "enum": ["computed", "unavailable_no_mev_estimate", "not_claimed_on_this_route", "unavailable_no_sol_price", "unavailable_platform_fee"]
+                    "description": "Why netUsd has the value it does. not_claimed_on_this_route = null by design: the route provides no MEV protection, so no avoided-loss credit is claimed. unavailable_no_mev_estimate = no sandwich estimate was available. unavailable_no_sol_price = a bundle's Jito tip could not be priced. unavailable_platform_fee = Jupiter's fee could not be priced. unavailable_priority_fee = the priority fee could not be read from the transaction or priced. In every unavailable case no net is stated.",
+                    "enum": ["computed", "unavailable_no_mev_estimate", "not_claimed_on_this_route", "unavailable_no_sol_price", "unavailable_platform_fee", "unavailable_priority_fee"]
                   },
                   "note": { "type": "string" }
                 }

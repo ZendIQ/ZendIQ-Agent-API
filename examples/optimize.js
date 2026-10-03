@@ -150,6 +150,7 @@ function printVenueDecision(d) {
     unavailable_no_mev_estimate: 'no MEV estimate available',
     unavailable_no_sol_price: 'Jito tip could not be priced',
     unavailable_platform_fee: 'Jupiter fee could not be priced',
+    unavailable_priority_fee: 'priority fee could not be priced',
   }[nb.netUsdBasis] ?? 'unavailable';
   console.log(`  net benefit  ${nb.netUsd != null ? `$${nb.netUsd.toFixed(4)}` : `— ${netBasis}`}`);
   console.log(`  transaction  ${typeof o.transaction === 'string' ? `${Buffer.from(o.transaction, 'base64').length} bytes (unsigned)` : 'none'}`);
