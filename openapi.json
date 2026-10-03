@@ -313,7 +313,7 @@
         "type": "object",
         "description": "Where the answer came from, so it can be audited rather than trusted.",
         "properties": {
-          "schema_version": { "type": "string" },
+          "schema_version": { "type": "string", "description": "Per endpoint. /analyse and /analyse-token are at 1.2, which added `rejected_value` on signals and `inputs.marketPair`; /optimize is at 1.1 for the same change." },
           "snapshot": {
             "type": ["object", "null"],
             "description": "The chain position the evidence was observed at. Null on /analyse-token when the slot lookup failed entirely.",
@@ -348,7 +348,22 @@
               { "id": "creation_slot_transactions", "type": "continuous", "value": 2, "unit": "transactions", "status": "pass" }
             ]]
           },
-          "inputs": { "type": "object" }
+          "inputs": {
+            "type": "object",
+            "properties": {
+              "marketPair": {
+                "type": ["object", "null"],
+                "description": "The DexScreener pool the market signals (price_change_24h, liquidity_depth, market_cap) were read from. With three or more priced pools, pools priced more than 5× from the median are dropped before the deepest is chosen (method median_consensus); with fewer, the deepest is used (method deepest). Null when the data came from another source or none.",
+                "properties": {
+                  "pairAddress": { "type": ["string", "null"] },
+                  "method": { "type": "string", "enum": ["median_consensus", "deepest"] },
+                  "poolsConsidered": { "type": "integer" },
+                  "poolsDropped": { "type": "integer" },
+                  "medianPriceUsd": { "type": ["number", "null"] }
+                }
+              }
+            }
+          }
         }
       },
       "Signal": {
@@ -375,6 +390,10 @@
             "description": "Null for categorical signals.",
             "enum": [null, "percent", "usd", "days", "tokens", "transactions", "ratio_7d_to_baseline"]
           },
+          "rejected_value": {
+            "type": "number",
+            "description": "Present only with reason implausible_value: the figure the source reported, in `unit`, which no real token can have. It is kept for audit and is not a reading of the token; do not repeat it as fact."
+          },
           "status": {
             "type": "string",
             "description": "pass = read and unremarkable. warn / fail = read and concerning, at increasing severity. unknown = could not be read at all.",
@@ -382,13 +401,13 @@
           },
           "reason": {
             "type": "string",
-            "description": "Present when status is \"unknown\", naming which source did not answer, either because it failed or because it ran its full timeout. insufficient_history is a fact about the token; every other unknown value is a fact about our data sources on this call, so the same mint can resolve differently on a later call. One value appears on a read signal: partial_scan_lower_bound on creator_launches_30d, meaning the creator's history ran past its time budget and `value` is a lower bound; its status is then warn or fail, never pass.",
+            "description": "Present when status is \"unknown\", naming which source did not answer, either because it failed or because it ran its full timeout. insufficient_history is a fact about the token; every other unknown value is a fact about our data sources on this call, so the same mint can resolve differently on a later call. implausible_value means the source answered with a figure no real token can have (market cap above $5T, or a 24h gain above +10,000% on a token over 30 days old); the figure is in `rejected_value`. One value appears on a read signal: partial_scan_lower_bound on creator_launches_30d, meaning the creator's history ran past its time budget and `value` is a lower bound; its status is then warn or fail, never pass.",
             "enum": [
               "onchain_unavailable", "holder_distribution_unavailable", "rugcheck_unavailable",
               "launch_platform_unavailable", "lp_lock_unavailable", "price_history_fetch_failed",
               "insufficient_history", "volume_history_unavailable", "creation_time_unavailable",
               "market_data_unavailable", "creator_history_unavailable", "creation_slot_unavailable",
-              "partial_scan_lower_bound"
+              "implausible_value", "partial_scan_lower_bound"
             ]
           }
         },
