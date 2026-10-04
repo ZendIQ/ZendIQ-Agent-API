@@ -1,6 +1,6 @@
 {
   "name": "@zendiq/mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "mcpName": "ai.zendiq/mcp",
   "description": "MCP server for ZendIQ: screen Solana tokens for free, triage a swap ($0.01) or build it ($0.02), paid per call over x402. Zero custody.",
   "license": "MIT",
