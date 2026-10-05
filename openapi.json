@@ -302,18 +302,19 @@
       },
       "RiskLevel": {
         "type": "string",
-        "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+        "description": "On tokenRisk: CRITICAL = evidence the token is rigged against you (score 75+ with at least one red flag; 75+ without one is reported as HIGH, and the score is unchanged). HIGH = a risky kind of token, a falling price, or not fully checked. MEDIUM / LOW = established tokens without red flags."
       },
       "Verdict": {
         "type": "string",
         "enum": ["Safe", "Protect", "Refuse"],
-        "description": "Closed enum within v1 — no new values will be added inside this version, so it is safe to switch on exhaustively. Safe: proceed. Protect: proceed only with the protection in recommendedExecution. Refuse: do not execute."
+        "description": "Closed enum within v1 — no new values will be added inside this version, so it is safe to switch on exhaustively. Safe: proceed. Protect: proceed only with the protection in recommendedExecution. Refuse: do not execute. Refuse is reached only on evidence: a hard red flag (tokenRisk.components.redFlags.hardFlags) on its own, or a CRITICAL token level that includes at least one red flag whose signal failed. Priors (base rates) and coverage (unchecked signals) can raise a trade to Protect but never to Refuse. Safe requires uncapped priors below the cap: a token in the highest base-rate class (tokenRisk.components.priors.points >= priors.cap, such as a fresh launchpad token) is at most Protect on every route, RFQ and gasless included."
       },
       "Provenance": {
         "type": "object",
         "description": "Where the answer came from, so it can be audited rather than trusted.",
         "properties": {
-          "schema_version": { "type": "string", "description": "Per endpoint. /analyse and /analyse-token are at 1.3 and /optimize at 1.2. 1.2 (/optimize 1.1) added `rejected_value` on signals and `inputs.marketPair`; 1.3 (/optimize 1.2) added `inputs.priceHistory` and the `rate_limited` reason." },
+          "schema_version": { "type": "string", "description": "Per endpoint. /analyse and /analyse-token are at 1.4 and /optimize at 1.3. 1.2 (/optimize 1.1) added `rejected_value` on signals and `inputs.marketPair`; 1.3 (/optimize 1.2) added `inputs.priceHistory` and the `rate_limited` reason; 1.4 (/optimize 1.3) added `tokenRisk.components` (red flags, capped priors, coverage), and the score became their total." },
           "snapshot": {
             "type": ["object", "null"],
             "description": "The chain position the evidence was observed at. Null on /analyse-token when the slot lookup failed entirely.",
@@ -395,7 +396,7 @@
           "type": { "type": "string", "enum": ["categorical", "continuous"] },
           "value": {
             "type": ["string", "number", "object", "null"],
-            "description": "The observed reading, in `unit`. Null whenever status is \"unknown\". For mint_authority and freeze_authority, null is the good case and means the authority is revoked; a base58 address means it is still held. An authority set to the all-zero address (11111111111111111111111111111111) is reported as held, because that is what the chain stores."
+            "description": "The observed reading, in `unit`. Null whenever status is \"unknown\", and on a pass with reason no_lp_on_curve. For mint_authority and freeze_authority, null is the good case and means the authority is revoked; a base58 address means it is still held. An authority set to the all-zero address (11111111111111111111111111111111) is reported as held, because that is what the chain stores."
           },
           "unit": {
             "type": ["string", "null"],
@@ -408,19 +409,26 @@
           },
           "status": {
             "type": "string",
-            "description": "pass = read and unremarkable. warn / fail = read and concerning, at increasing severity. unknown = could not be read at all.",
+            "description": "pass = read and unremarkable. warn / fail = read and concerning, at increasing severity. unknown = could not be read at all. A pass with a `reason` means the risk this check measures cannot occur for this token; read reason before treating it as a measured pass (lp_locked with no_lp_on_curve: a token still on its launchpad bonding curve has no LP).",
             "enum": ["pass", "warn", "fail", "unknown"]
           },
           "reason": {
             "type": "string",
-            "description": "Present when status is \"unknown\", naming which source did not answer, either because it failed or because it ran its full timeout. insufficient_history is a fact about the token; every other unknown value is a fact about our data sources on this call, so the same mint can resolve differently on a later call. implausible_value means the source answered with a figure no real token can have (market cap above $5T, or a 24h gain above +10,000% on a token over 30 days old); the figure is in `rejected_value`. rate_limited means the price-history source was rate-limiting requests, so price_change_3m, price_change_long_term and volume_trend were not checked on this call; a later call can resolve them. One value appears on a read signal: partial_scan_lower_bound on creator_launches_30d, meaning the creator's history ran past its time budget and `value` is a lower bound; its status is then warn or fail, never pass.",
+            "description": "Present when status is \"unknown\", naming which source did not answer, either because it failed or because it ran its full timeout. insufficient_history is a fact about the token; every other unknown value is a fact about our data sources on this call, so the same mint can resolve differently on a later call. When ZendIQ cannot read a signal but RugCheck reports the same fact, the signal resolves from RugCheck instead (status warn, or fail for mint/freeze authority, no reason, `inputs.source: \"rugcheck_fallback\"`). implausible_value means the source answered with a figure no real token can have (market cap above $5T, or a 24h gain above +10,000% on a token over 30 days old); the figure is in `rejected_value`. rate_limited means the price-history source was rate-limiting requests, so price_change_3m, price_change_long_term and volume_trend were not checked on this call; a later call can resolve them. holder_owner_lookup_failed means the largest holders were read but their owners were not, so pool and bonding-curve vaults could not be told apart from real holders; holder_sources_unavailable means neither holder source answered (both failures are in `inputs.sourceFailures`). Two values appear on a read signal: partial_scan_lower_bound on creator_launches_30d, meaning the creator's history ran past its time budget and `value` is a lower bound, so its status is then warn or fail, never pass; and no_lp_on_curve on lp_locked, with status pass, meaning the check cannot apply (see `status`). issuer_controlled, on mint_authority or freeze_authority with status warn, means the authority is a verified program-derived address of a listed bridge or issuer (Wormhole Token Bridge, NEAR Omni Bridge), named in `inputs.authority`: no key holder controls it, so it is not a hard red flag. Two values mark a listed asset (regulated stablecoins, established protocol tokens, liquid staking tokens) whose class does not score the check: regulated_issuer, on mint_authority or freeze_authority of a regulated stablecoin, status warn, with `inputs.authority` { address, issuer }; and asset_class_exempt, status warn, on any other check the class does not score that would have read warn or fail, with `inputs.assetClass`. In both, `value` keeps the measured reading and `inputs.measuredStatus` the status it would have had (with `inputs.measuredReason` if it had a reason); nothing is added to the score. A check the class does score is unaffected, and an exempt check that passes stays pass.",
             "enum": [
               "onchain_unavailable", "holder_distribution_unavailable", "rugcheck_unavailable",
               "launch_platform_unavailable", "lp_lock_unavailable", "price_history_fetch_failed",
               "insufficient_history", "volume_history_unavailable", "creation_time_unavailable",
               "market_data_unavailable", "creator_history_unavailable", "creation_slot_unavailable",
-              "implausible_value", "rate_limited", "partial_scan_lower_bound"
+              "implausible_value", "rate_limited", "partial_scan_lower_bound",
+              "holder_owner_lookup_failed", "holder_sources_unavailable", "no_lp_on_curve", "issuer_controlled",
+              "regulated_issuer", "asset_class_exempt"
             ]
+          },
+          "inputs": {
+            "type": "object",
+            "description": "Present on some signals: what the reading was computed from. On top_holder_concentration: `holderSource` (rugcheck_report or rpc), `sourceFailures`, `excludedAccounts` (custody accounts removed before measuring: bonding curve, pool vaults, burn, each with `address`, `reason`, `owner`, `pct`), `unclassifiedProgramHolders` (program-owned accounts that matched no rule and stay counted) and `unresolvedChecks`. On lp_locked with reason no_lp_on_curve: `applicable: false`. On mint_authority / freeze_authority with reason issuer_controlled: `authority` (`address`, `program`, `issuer`); with reason regulated_issuer: `authority` (`address`, `issuer`) and `measuredStatus`. With reason asset_class_exempt: `assetClass`, `measuredStatus` and, when the reading had one, `measuredReason`.",
+            "additionalProperties": true
           }
         },
         "required": ["id", "type", "value", "unit", "status"]
@@ -433,8 +441,38 @@
             "properties": {
               "mint": { "$ref": "#/components/schemas/Base58Pubkey" },
               "symbol": { "type": ["string", "null"] },
-              "score": { "type": "number" },
+              "score": { "type": "number", "description": "redFlags.points + priors.cappedPoints + coverage.points from `components`, clamped to 0–100; 100 when RugCheck reports a confirmed rug." },
               "level": { "$ref": "#/components/schemas/RiskLevel" },
+              "components": {
+                "type": ["object", "null"],
+                "description": "The score split by what kind of claim each point makes. redFlags: evidence of rug or extraction risk about this token (live authorities, real holder concentration after custody exclusions, creator history, bundled launch, unlocked LP, RugCheck findings we do not measure ourselves). Every red flag sits on a signal that read warn or fail. priors: the base rate of loss for this kind of token (launchpad, age, size), not evidence of manipulation: launch platform, age, market cap, liquidity, price and volume movement. At most `cap` (45) of them count toward the score, so priors alone stay just below the HIGH band. coverage: caution points for checks that could not run (each `…: unavailable` factor). Each entry in a component's factors names the factor, its points and its signal.",
+                "properties": {
+                  "redFlags": {
+                    "type": "object",
+                    "properties": {
+                      "points": { "type": "number" },
+                      "hardFlags": { "type": "array", "items": { "type": "string", "enum": ["mint_authority_live", "freeze_authority_live", "permanent_delegate", "previously_rugged", "bundled_launch_confirmed", "top_holder_majority"] }, "description": "Red flags that refuse on their own, whatever the score. top_holder_majority is a top-1 holder over 50% after custody exclusions, from ZendIQ's own holder read only. bundled_launch_confirmed is 5 or more transactions in the creation slot, not the 3–4 'possible bundle' tier." },
+                      "factors": { "type": "array", "items": { "$ref": "#/components/schemas/ComponentFactor" } }
+                    }
+                  },
+                  "priors": {
+                    "type": "object",
+                    "properties": {
+                      "points": { "type": "number", "description": "Uncapped total." },
+                      "cappedPoints": { "type": "number", "description": "What counts toward score: min(points, cap)." },
+                      "cap": { "type": "number", "examples": [45] },
+                      "factors": { "type": "array", "items": { "$ref": "#/components/schemas/ComponentFactor" } }
+                    }
+                  },
+                  "coverage": {
+                    "type": "object",
+                    "properties": {
+                      "points": { "type": "number" },
+                      "factors": { "type": "array", "items": { "$ref": "#/components/schemas/ComponentFactor" } }
+                    }
+                  }
+                }
+              },
               "factors": {
                 "type": "array",
                 "description": "Omitted on /optimize.",
@@ -444,7 +482,12 @@
                     "name": { "type": "string" },
                     "severity": { "$ref": "#/components/schemas/RiskLevel" },
                     "detail": { "type": "string" },
-                    "points": { "type": "number", "description": "This factor's contribution to score. Points across all factors sum to score before the 0–100 clamp." }
+                    "points": { "type": "number", "description": "This factor's own points, before the priors cap. Points no longer sum to score: see `components`." },
+                    "component": { "type": "string", "enum": ["redFlags", "priors", "coverage"], "description": "Present only on factors with points above 0." },
+                    "signal": { "type": ["string", "null"], "description": "The signal this factor reads. Null for a factor no signal backs, such as the name-keyword speculative prior or total data loss." },
+                    "signalStatus": { "type": "string", "enum": ["warn", "fail"], "description": "On red flags: the status of `signal`." },
+                    "hardFlag": { "type": "string", "description": "On red flags that refuse on their own; see components.redFlags.hardFlags." },
+                    "source": { "type": "string", "description": "rugcheck_fallback: ZendIQ could not read this signal itself on this scan, so RugCheck's report of the same fact resolved it (the signal's inputs.source says the same). name_keyword / known_memecoin_list: what triggered the speculative-asset prior." }
                   }
                 }
               },
@@ -465,6 +508,19 @@
             "required": ["available", "assumedScore", "assumedLevel"]
           }
         ]
+      },
+      "ComponentFactor": {
+        "type": "object",
+        "description": "A scored factor as listed inside tokenRisk.components.",
+        "properties": {
+          "name": { "type": "string" },
+          "points": { "type": "number" },
+          "signal": { "type": ["string", "null"] },
+          "signalStatus": { "type": "string", "enum": ["warn", "fail"] },
+          "hardFlag": { "type": "string" },
+          "source": { "type": "string" }
+        },
+        "required": ["name", "points", "signal"]
       },
       "SandwichExposure": {
         "oneOf": [
@@ -674,7 +730,7 @@
               "reasons": { "type": "array", "items": { "type": "string" } },
               "tokenRisk": {
                 "$ref": "#/components/schemas/TokenRisk",
-                "description": "Reduced here: /optimize returns mint, symbol, score and level only. The factors array and dataSource are carried by /analyse and /analyse-token, not by this endpoint. An available:false object means the token was never screened."
+                "description": "Reduced here: /optimize returns mint, symbol, score, level and components only. The factors array and dataSource are carried by /analyse and /analyse-token, not by this endpoint. An available:false object means the token was never screened."
               },
               "sandwichExposure": {
                 "$ref": "#/components/schemas/SandwichExposure",
