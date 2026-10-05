@@ -383,7 +383,9 @@ A direct venue is quoted alongside and replaces the Jupiter route only when it b
 
 ### When token screening does not complete
 
-Screening can time out or fail upstream. Neither endpoint blocks on it — both still return `200` — but the gap is always explicit, never a clean-looking score:
+One rule covers every endpoint. A slow or failing source never fails the call: that one check comes back `unknown` inside a completed, scored `200`, and an unknown adds caution points rather than counting as a pass. A call returns `502 analysis_unavailable`, and is not charged, only when no honest answer is possible: on any of the three when a mint cannot be confirmed, on `/analyse-token` when no score can be produced at all, and on `/analyse` when neither the route nor the screening could be retrieved. `/optimize` returns `502 optimize_unavailable`, also not charged, when it cannot build a transaction.
+
+If screening as a whole does not complete on `/analyse` or `/optimize` but the route does, the call still returns `200`, and the gap is explicit, never a clean-looking score:
 
 - `tokenRisk` is `{ mint, available: false, error, assumedScore: 50, assumedLevel: "HIGH", note }`, with no `score` or `level`.
 - Fees and overall risk are sized as if the token scored `HIGH`, not as if it scored 0.
