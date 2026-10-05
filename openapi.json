@@ -314,7 +314,7 @@
         "type": "object",
         "description": "Where the answer came from, so it can be audited rather than trusted.",
         "properties": {
-          "schema_version": { "type": "string", "description": "Per endpoint. /analyse and /analyse-token are at 1.5 and /optimize at 1.4. 1.2 (/optimize 1.1) added `rejected_value` on signals and `inputs.marketPair`; 1.3 (/optimize 1.2) added `inputs.priceHistory` and the `rate_limited` reason; 1.4 (/optimize 1.3) added `tokenRisk.components` (red flags, capped priors, coverage), and the score became their total; 1.5 (/optimize 1.4) added `inputs.marketSource`, the dexscreener_unavailable and no_own_market_pair reasons and a +5 coverage factor for each unreadable market signal, and lp_locked now reads the LP lock of the pool the market data came from, out of RugCheck's full report (`inputs.lpSource`)." },
+          "schema_version": { "type": "string", "description": "Per endpoint. /analyse and /analyse-token are at 1.6 and /optimize at 1.5. 1.2 (/optimize 1.1) added `rejected_value` on signals and `inputs.marketPair`; 1.3 (/optimize 1.2) added `inputs.priceHistory` and the `rate_limited` reason; 1.4 (/optimize 1.3) added `tokenRisk.components` (red flags, capped priors, coverage), and the score became their total; 1.5 (/optimize 1.4) added `inputs.marketSource`, the dexscreener_unavailable and no_own_market_pair reasons and a +5 coverage factor for each unreadable market signal, and lp_locked now reads the LP lock of the pool the market data came from, out of RugCheck's full report (`inputs.lpSource`); 1.6 (/optimize 1.5) added `inputs.marketSource.fields` (source per market field: a curve token's liquidity now comes from pump.fun's curve reserves when DexScreener has none), the 5-minute `dexscreener_cached` fallback with `inputs.marketCachedAt`, and Retry-After handling (`dexscreener.retrySkipped`)." },
           "snapshot": {
             "type": ["object", "null"],
             "description": "The chain position the evidence was observed at. Null on /analyse-token when the slot lookup failed entirely.",
@@ -377,21 +377,32 @@
               },
               "marketSource": {
                 "type": "object",
-                "description": "Which source supplied the market signals (price_change_24h, liquidity_depth, market_cap), and why DexScreener did not when it did not. DexScreener is tried twice before pump.fun's coin data is used; pump.fun has no 24h price change, and no liquidity once a coin has left its bonding curve, so those signals are then unknown with reason dexscreener_unavailable and add 5 coverage points each.",
+                "description": "Which source supplied the market signals (price_change_24h, liquidity_depth, market_cap), and why DexScreener did not when it did not. DexScreener is tried twice; a 429's Retry-After is waited out when it fits the 7.5 s budget. When the live call fails, DexScreener's last good answer for the mint is used if it is at most 5 minutes old (source dexscreener_cached, with `inputs.marketCachedAt`); it is never served as fresh. Otherwise pump.fun's coin data is used. Each field is filled separately: a figure DexScreener lacks is taken from pump.fun where pump.fun has it (a curve token's liquidity from its curve reserves, never a graduated coin's). pump.fun has no 24h price change, and no liquidity once a coin has left its curve; a field no source has is unknown and adds 5 coverage points.",
                 "properties": {
-                  "source": { "type": ["string", "null"], "enum": ["dexscreener", "pumpfun_fallback", null] },
+                  "source": { "type": ["string", "null"], "enum": ["dexscreener", "dexscreener_cached", "pumpfun_fallback", null], "description": "The base source. dexscreener_cached: the live call failed (see dexscreener) and an answer at most 5 minutes old was used." },
+                  "fields": {
+                    "type": "object",
+                    "description": "The source of each market field; null when no source had it (the signal is then unknown).",
+                    "properties": {
+                      "priceChange24h": { "type": ["string", "null"], "enum": ["dexscreener", "dexscreener_cached", "pumpfun", null] },
+                      "liquidity": { "type": ["string", "null"], "enum": ["dexscreener", "dexscreener_cached", "pumpfun_curve", null] },
+                      "marketCap": { "type": ["string", "null"], "enum": ["dexscreener", "dexscreener_cached", "pumpfun", null] }
+                    }
+                  },
                   "dexscreener": {
                     "type": "object",
                     "properties": {
                       "status": { "type": "string", "enum": ["ok", "quote_only", "failed"], "description": "quote_only: DexScreener lists the token only as the quote side of other tokens' pairs, so it has no market figures of its own." },
                       "attempts": { "type": "integer" },
                       "reason": { "type": "string", "enum": ["timeout", "rate_limited", "http_error", "network_error", "no_pairs", "no_solana_pairs", "no_pair_for_mint", "no_pair_after_consensus"], "description": "Present when status is failed: why the last attempt returned nothing." },
-                      "httpStatus": { "type": ["integer", "null"] }
+                      "httpStatus": { "type": ["integer", "null"] },
+                      "retrySkipped": { "type": "string", "enum": ["retry_after_exceeds_budget", "budget_exhausted"], "description": "Present when the first attempt failed and no retry was made: the 429's Retry-After, or the time left, did not fit the 7.5 s budget." }
                     }
                   },
                   "sourceFailures": { "type": "array", "description": "One entry per failed DexScreener attempt, kept when a retry then succeeded.", "items": { "type": "object", "properties": { "source": { "type": "string" }, "attempt": { "type": "integer" }, "detail": { "type": "string" } } } }
                 }
               },
+              "marketCachedAt": { "type": "string", "format": "date-time", "description": "Present only when marketSource.source is dexscreener_cached: when the cached DexScreener answer was fetched. Never more than 5 minutes before the scan." },
               "lpSource": { "type": ["string", "null"], "enum": ["rugcheck_report", "rugcheck_summary_fallback", null], "description": "Which RugCheck reading lpLockedPct is. rugcheck_report: the LP lock of the pool the market data came from. rugcheck_summary_fallback: the report had no LP reading, so the token-wide summary (a liquidity-weighted average over every pool, which has returned 0 and 100 on identical requests) was used. Null when lpLockedPct is null." }
             }
           }
