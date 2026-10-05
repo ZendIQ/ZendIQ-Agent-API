@@ -18,11 +18,10 @@ const { ZendIQClient, resolveNetwork } = require('./zendiq-client');
 const BASE_URL = process.env.ZENDIQ_API_URL ?? 'https://api.zendiq.ai';
 const STATE_DIR = process.env.AGENT_STATE_DIR ?? path.join(__dirname, '..', 'runtime');
 
-// SOL -> BONK: a memecoin output, so the verdict exercises the token-class path
-// that §12.2.1 made the primary Protect trigger.
+// SOL -> JUP: an established, verified token as the default example swap.
 const SWAP = {
   inputMint: 'So11111111111111111111111111111111111111112',
-  outputMint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
+  outputMint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
   amount: '500000000',
   slippageBps: 100,
 };
@@ -64,7 +63,7 @@ const SWAP = {
   const manifest = await client.manifest();
   console.log(`manifest  ${manifest.version ?? '?'}  ${manifest.network ?? ''}`);
 
-  console.log(`\nanalyse   ${SWAP.amount} lamports SOL -> BONK`);
+  console.log(`\nanalyse   ${SWAP.amount} lamports SOL -> JUP`);
   const started = Date.now();
   const result = await client.analyse(SWAP);
   const ms = Date.now() - started;

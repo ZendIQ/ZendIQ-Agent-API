@@ -31,7 +31,7 @@ This repository contains no extension analytics, user telemetry, production depl
 ```bash
 curl -s -X POST https://api.zendiq.ai/v1/agent/analyse-token \
   -H "content-type: application/json" \
-  -d '{"mint":"DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}'
+  -d '{"mint":"JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"}'
 ```
 
 PowerShell:
@@ -39,7 +39,7 @@ PowerShell:
 ```powershell
 Invoke-RestMethod -Method Post https://api.zendiq.ai/v1/agent/analyse-token `
   -ContentType 'application/json' `
-  -Body '{"mint":"DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}' | Select-Object -ExpandProperty tokenRisk
+  -Body '{"mint":"JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"}' | Select-Object -ExpandProperty tokenRisk
 ```
 
 Python (standard library only):
@@ -49,7 +49,7 @@ import json, urllib.request
 
 req = urllib.request.Request(
     "https://api.zendiq.ai/v1/agent/analyse-token",
-    data=json.dumps({"mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}).encode(),
+    data=json.dumps({"mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"}).encode(),
     headers={"content-type": "application/json"},
 )
 with urllib.request.urlopen(req, timeout=30) as resp:
@@ -320,7 +320,7 @@ npm run demo
 Open `http://127.0.0.1:4173`, then in a second terminal:
 
 ```bash
-npm run demo:run -- --mint DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 --taker <YOUR_MAINNET_PUBKEY>
+npm run demo:run -- --mint JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN --taker <YOUR_MAINNET_PUBKEY>
 ```
 
 To finish with a real on-chain landing, add `--execute` and set `ZENDIQ_TAKER_KEYPAIR` to the mainnet keypair for `--taker`. Without `--execute`, the execution lane stops at simulation and spends nothing on-chain.
@@ -340,7 +340,7 @@ The complete machine-readable contract is [`openapi.json`](openapi.json) (OpenAP
 `POST /v1/agent/analyse-token` — **free**, rate-limited (screen stage)
 
 ```json
-{ "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263" }
+{ "mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN" }
 ```
 
 Screen a token by mint, with no trade size. Returns the token risk score, its signal breakdown, `signals_resolved` coverage, and a `cache` block (`hit`, `ageSeconds`, `observedAt`) — a cached score reports the slot and time it was computed at, never the current one. No payment; rate-limited per IP.
@@ -350,7 +350,7 @@ Screen a token by mint, with no trade size. Returns the token risk score, its si
 ```json
 {
   "inputMint": "So11111111111111111111111111111111111111112",
-  "outputMint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+  "outputMint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
   "amount": "500000000",
   "slippageBps": 100
 }

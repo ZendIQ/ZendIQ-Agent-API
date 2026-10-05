@@ -35,7 +35,7 @@ const doExecute = args.includes('--execute');
 
 const SWAP = {
   inputMint: valueFor('--input', 'So11111111111111111111111111111111111111112'),
-  outputMint: valueFor('--mint', 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'),
+  outputMint: valueFor('--mint', 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN'),
   amount: valueFor('--amount', '3000000'),
   slippageBps: Number(valueFor('--slippage', '100')),
 };
