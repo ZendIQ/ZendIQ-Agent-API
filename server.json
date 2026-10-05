@@ -8,12 +8,12 @@
     "url": "https://github.com/ZendIQ/ZendIQ-Agent-API",
     "source": "github"
   },
-  "version": "1.0.1",
+  "version": "1.0.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@zendiq/mcp",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "transport": {
         "type": "stdio"
       },
