@@ -74,7 +74,7 @@ test('with no configuration and no wallet, the free screen answers over stdio an
     req.on('end', () => {
       screened.push({ url: req.url, body: JSON.parse(body) });
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ stage: 'screen', signals_resolved: '13/16', tokenRisk: { score: 0, level: 'LOW' } }));
+      res.end(JSON.stringify({ stage: 'screen', signals_resolved: '13/17', tokenRisk: { score: 0, level: 'LOW' } }));
     });
   });
   await new Promise((r) => stub.listen(0, '127.0.0.1', r));
@@ -92,7 +92,7 @@ test('with no configuration and no wallet, the free screen answers over stdio an
     assert.ok(msgs.every((m) => m.jsonrpc === '2.0'));
     assert.equal(msgs[1].result.tools.length, 3);
     assert.equal(msgs[2].result.isError, undefined, msgs[2].result.content?.[0]?.text);
-    assert.equal(msgs[2].result.structuredContent.signals_resolved, '13/16');
+    assert.equal(msgs[2].result.structuredContent.signals_resolved, '13/17');
     assert.deepEqual(screened, [{ url: '/v1/agent/analyse-token', body: { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' } }]);
     assert.match(out.stderr, /ready .* state /, 'the resolved state folder is logged to stderr');
     assert.match(out.stderr, /payer: none \(no key at .*payer-mainnet\.key\.json/, 'no key is reported, not hidden');

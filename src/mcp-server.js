@@ -121,7 +121,7 @@ const TOOL_SCREEN = {
   title: 'Screen a Solana token',
   description:
     'Call first, whenever you are considering a Solana token and have no trade yet: is this '
-    + 'mint safe to touch? Returns a 0-100 risk score and level, the 16 checks behind it '
+    + 'mint safe to touch? Returns a 0-100 risk score and level, the 17 checks behind it '
     + '(authorities, holders, rug flags, LP lock, creator history and more), coverage as '
     + 'signals_resolved, and cache age. Treat an unknown check as unknown, never as safe. Free, '
     + 'no wallet or payment; mainnet data. To judge a specific trade, call zendiq_triage_swap.',
@@ -143,7 +143,7 @@ const TOOL_SCREEN = {
           level: { type: ['string', 'null'] },
         },
       },
-      signals_resolved: { type: 'string', description: 'Signal coverage, e.g. "12/16".' },
+      signals_resolved: { type: 'string', description: 'Signal coverage, e.g. "13/17".' },
       cache: {
         type: 'object',
         properties: {

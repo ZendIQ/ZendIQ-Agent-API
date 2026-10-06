@@ -59,7 +59,7 @@ risk = body["tokenRisk"]
 print(risk["symbol"], risk["score"], risk["level"], "signals", body["signals_resolved"])
 ```
 
-The response holds `tokenRisk` (score and level), the 16 `signals` behind it with coverage in `signals_resolved`, and an `analysisId` that `/optimize` can reuse for 60 s.
+The response holds `tokenRisk` (score and level), the 17 `signals` behind it with coverage in `signals_resolved`, and an `analysisId` that `/optimize` can reuse for 60 s.
 
 **Paid calls.** The steps below run on your machine. The only calls to ZendIQ are the scoring and `/optimize` requests to the hosted API; no URL needs setting for those. The `npm` commands are the same in bash and PowerShell.
 

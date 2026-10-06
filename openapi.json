@@ -314,7 +314,7 @@
         "type": "object",
         "description": "Where the answer came from, so it can be audited rather than trusted.",
         "properties": {
-          "schema_version": { "type": "string", "description": "Per endpoint. /analyse and /analyse-token are at 1.7 and /optimize at 1.6. 1.2 (/optimize 1.1) added `rejected_value` on signals and `inputs.marketPair`; 1.3 (/optimize 1.2) added `inputs.priceHistory` and the `rate_limited` reason; 1.4 (/optimize 1.3) added `tokenRisk.components` (red flags, capped priors, coverage), and the score became their total; 1.5 (/optimize 1.4) added `inputs.marketSource`, the dexscreener_unavailable and no_own_market_pair reasons and a +5 coverage factor for each unreadable market signal, and lp_locked now reads the LP lock of the pool the market data came from, out of RugCheck's full report (`inputs.lpSource`); 1.6 (/optimize 1.5) added `inputs.marketSource.fields` (source per market field: a curve token's liquidity now comes from pump.fun's curve reserves when DexScreener has none), the 5-minute `dexscreener_cached` fallback with `inputs.marketCachedAt`, and Retry-After handling (`dexscreener.retrySkipped`); 1.7 (/optimize 1.6) added the verification_partial reason and the `Bridged asset` class (Wormhole ETH and WBTC), and a bridge-controlled authority on a bridged stablecoin reads issuer_controlled instead of regulated_issuer." },
+          "schema_version": { "type": "string", "description": "Per endpoint. /analyse and /analyse-token are at 1.8 and /optimize at 1.7. 1.2 (/optimize 1.1) added `rejected_value` on signals and `inputs.marketPair`; 1.3 (/optimize 1.2) added `inputs.priceHistory` and the `rate_limited` reason; 1.4 (/optimize 1.3) added `tokenRisk.components` (red flags, capped priors, coverage), and the score became their total; 1.5 (/optimize 1.4) added `inputs.marketSource`, the dexscreener_unavailable and no_own_market_pair reasons and a +5 coverage factor for each unreadable market signal, and lp_locked now reads the LP lock of the pool the market data came from, out of RugCheck's full report (`inputs.lpSource`); 1.6 (/optimize 1.5) added `inputs.marketSource.fields` (source per market field: a curve token's liquidity now comes from pump.fun's curve reserves when DexScreener has none), the 5-minute `dexscreener_cached` fallback with `inputs.marketCachedAt`, and Retry-After handling (`dexscreener.retrySkipped`); 1.7 (/optimize 1.6) added the verification_partial reason and the `Bridged asset` class (Wormhole ETH and WBTC), and a bridge-controlled authority on a bridged stablecoin reads issuer_controlled instead of regulated_issuer; 1.8 (/optimize 1.7) added the token_extensions signal (appended last: permanent delegate, frozen default accounts, pause authority and transfer hook, read from the mint), the default_account_frozen and pausable hard flags, permanent_delegate read from the mint with RugCheck only as a fallback, the extensions_not_decoded reason, and `rowsUsed`, `supplyCoveredPct` and `perWalletLowerBound` on top_holder_concentration, whose factors now say account, not wallet." },
           "snapshot": {
             "type": ["object", "null"],
             "description": "The chain position the evidence was observed at. Null on /analyse-token when the slot lookup failed entirely.",
@@ -325,10 +325,10 @@
             }
           },
           "evidence_fingerprint": { "type": "string", "description": "16-character SHA-256 prefix over the evidence used." },
-          "signals_resolved": { "type": "string", "description": "Coverage: resolved signals over the total, e.g. \"11/16\" means five came back unknown. An unknown never lowers the score; most add a `…: unavailable` factor with +5 caution points. The exception is a short list of established assets (regulated stablecoins, bridged assets, established protocol tokens, liquid staking tokens), named by an asset-class factor such as `Regulated stablecoin` or `Bridged asset`: checks that do not apply to that class are not scored, so an unknown on one of them adds nothing. Treat unknown as unknown, never as safe: a LOW score with low coverage means few checks were answered, not that the token is low-risk.", "examples": ["14/16"] },
+          "signals_resolved": { "type": "string", "description": "Coverage: resolved signals over the total, e.g. \"11/17\" means six came back unknown. An unknown never lowers the score; most add a `…: unavailable` factor with +5 caution points. The exception is a short list of established assets (regulated stablecoins, bridged assets, established protocol tokens, liquid staking tokens), named by an asset-class factor such as `Regulated stablecoin` or `Bridged asset`: checks that do not apply to that class are not scored, so an unknown on one of them adds nothing. Treat unknown as unknown, never as safe: a LOW score with low coverage means few checks were answered, not that the token is low-risk.", "examples": ["14/17"] },
           "signals": {
             "type": "array",
-            "description": "Always all 16 signals, in a fixed order, whether or not each one resolved. A signal that could not be read is present with status \"unknown\" and a reason, never omitted and never silently downgraded to a pass. The example below is illustrative and shows one of every status; it is not a live reading of any particular token.",
+            "description": "Always all 17 signals, in a fixed order (a new signal is appended, never inserted), whether or not each one resolved. A signal that could not be read is present with status \"unknown\" and a reason, never omitted and never silently downgraded to a pass. The example below is illustrative and shows one of every status; it is not a live reading of any particular token.",
             "items": { "$ref": "#/components/schemas/Signal" },
             "examples": [[
               { "id": "mint_authority", "type": "categorical", "value": null, "unit": null, "status": "pass" },
@@ -410,22 +410,23 @@
       },
       "Signal": {
         "type": "object",
-        "description": "One piece of evidence. `status` is the scorer's reading of `value`, not a summary of the token. Treat \"unknown\" as absence of evidence: it is not a pass, and it is why `signals_resolved` is below 16.",
+        "description": "One piece of evidence. `status` is the scorer's reading of `value`, not a summary of the token. Treat \"unknown\" as absence of evidence: it is not a pass, and it is why `signals_resolved` is below 17.",
         "properties": {
           "id": {
             "type": "string",
-            "description": "Stable identifier. The full set is fixed at 16 and every response contains all of them.",
+            "description": "Stable identifier. The full set is 17 and every response contains all of them. token_extensions was added in schema 1.8, appended after the original 16 so their order is unchanged.",
             "enum": [
               "mint_authority", "freeze_authority", "top_holder_concentration", "rugcheck_report",
               "launch_platform", "lp_locked", "price_change_3m", "price_change_long_term",
               "volume_trend", "token_age", "price_change_24h", "liquidity_depth",
-              "market_cap", "creator_launches_30d", "creator_rug_rate", "creation_slot_transactions"
+              "market_cap", "creator_launches_30d", "creator_rug_rate", "creation_slot_transactions",
+              "token_extensions"
             ]
           },
           "type": { "type": "string", "enum": ["categorical", "continuous"] },
           "value": {
-            "type": ["string", "number", "object", "null"],
-            "description": "The observed reading, in `unit`. Null whenever status is \"unknown\", and on a pass with reason no_lp_on_curve. For mint_authority and freeze_authority, null is the good case and means the authority is revoked; a base58 address means it is still held. An authority set to the all-zero address (11111111111111111111111111111111) is reported as held, because that is what the chain stores."
+            "type": ["string", "number", "object", "array", "null"],
+            "description": "The observed reading, in `unit`. For token_extensions, an array of the holder controls found on the mint, each `{ control, authority, programId?, paused?, issuer? }` with control permanent_delegate, default_account_frozen, pausable or transfer_hook; empty when there are none. Null whenever status is \"unknown\", and on a pass with reason no_lp_on_curve. For mint_authority and freeze_authority, null is the good case and means the authority is revoked; a base58 address means it is still held. An authority set to the all-zero address (11111111111111111111111111111111) is reported as held, because that is what the chain stores."
           },
           "unit": {
             "type": ["string", "null"],
@@ -452,12 +453,12 @@
               "implausible_value", "rate_limited", "partial_scan_lower_bound",
               "holder_owner_lookup_failed", "holder_sources_unavailable", "no_lp_on_curve", "issuer_controlled",
               "dexscreener_unavailable", "no_own_market_pair", "verification_partial",
-              "regulated_issuer", "asset_class_exempt"
+              "regulated_issuer", "asset_class_exempt", "extensions_not_decoded"
             ]
           },
           "inputs": {
             "type": "object",
-            "description": "Present on some signals: what the reading was computed from. On top_holder_concentration: `holderSource` (rugcheck_report or rpc), `sourceFailures`, `excludedAccounts` (custody accounts removed before measuring: bonding curve, pool vaults, burn, each with `address`, `reason`, `owner`, `pct`), `unclassifiedProgramHolders` (program-owned accounts that matched no rule and stay counted) and `unresolvedChecks`. On lp_locked with reason no_lp_on_curve: `applicable: false`. On any other lp_locked: `lpSource` (rugcheck_report: the LP lock of `market`, the pool the market data came from, out of RugCheck's full report; rugcheck_summary_fallback: the report had no LP reading, so RugCheck's token-wide summary was used, with `reportError` saying why; null when neither had one), and `market` (`pubkey`, `marketType`, `matchedBy`: dexscreener_pair, pumpfun_pool or deepest_report_market). On price_change_24h, liquidity_depth or market_cap with reason dexscreener_unavailable: `marketSource` and `dexscreener` (`reason`, `httpStatus`, `attempts`). On mint_authority / freeze_authority with reason issuer_controlled: `authority` (`address`, `program`, `issuer`); with reason regulated_issuer: `authority` (`address`, `issuer`) and `measuredStatus`. With reason asset_class_exempt: `assetClass`, `measuredStatus` and, when the reading had one, `measuredReason`.",
+            "description": "Present on some signals: what the reading was computed from. On top_holder_concentration: `holderSource` (rugcheck_report or rpc), `sourceFailures`, `excludedAccounts` (custody accounts removed before measuring: bonding curve, pool vaults, burn, each with `address`, `reason`, `owner`, `pct`), `unclassifiedProgramHolders` (program-owned accounts that matched no rule and stay counted), `unresolvedChecks`, `rowsUsed` (rows in the holder table, at most 20: RugCheck and getTokenLargestAccounts both list the largest token accounts, not owners), `supplyCoveredPct` (share of supply those rows hold, custody included, before exclusions) and `perWalletLowerBound: true`. The value is the largest single token account's share: exact for that account, but a lower bound for a wallet, which can split its balance across accounts or hold accounts below row 20. On token_extensions: `tokenProgram` and `extensions` (every extension on the mint, by name); reason onchain_unavailable when the mint could not be read, extensions_not_decoded when it came back as raw bytes. On lp_locked with reason no_lp_on_curve: `applicable: false`. On any other lp_locked: `lpSource` (rugcheck_report: the LP lock of `market`, the pool the market data came from, out of RugCheck's full report; rugcheck_summary_fallback: the report had no LP reading, so RugCheck's token-wide summary was used, with `reportError` saying why; null when neither had one), and `market` (`pubkey`, `marketType`, `matchedBy`: dexscreener_pair, pumpfun_pool or deepest_report_market). On price_change_24h, liquidity_depth or market_cap with reason dexscreener_unavailable: `marketSource` and `dexscreener` (`reason`, `httpStatus`, `attempts`). On mint_authority / freeze_authority with reason issuer_controlled: `authority` (`address`, `program`, `issuer`); with reason regulated_issuer: `authority` (`address`, `issuer`) and `measuredStatus`. With reason asset_class_exempt: `assetClass`, `measuredStatus` and, when the reading had one, `measuredReason`.",
             "additionalProperties": true
           }
         },
@@ -481,7 +482,7 @@
                     "type": "object",
                     "properties": {
                       "points": { "type": "number" },
-                      "hardFlags": { "type": "array", "items": { "type": "string", "enum": ["mint_authority_live", "freeze_authority_live", "permanent_delegate", "previously_rugged", "bundled_launch_confirmed", "top_holder_majority"] }, "description": "Red flags that refuse on their own, whatever the score. top_holder_majority is a top-1 holder over 50% after custody exclusions, from ZendIQ's own holder read only. bundled_launch_confirmed is 5 or more transactions in the creation slot, not the 3–4 'possible bundle' tier." },
+                      "hardFlags": { "type": "array", "items": { "type": "string", "enum": ["mint_authority_live", "freeze_authority_live", "permanent_delegate", "default_account_frozen", "pausable", "previously_rugged", "bundled_launch_confirmed", "top_holder_majority"] }, "description": "Red flags that refuse on their own, whatever the score. permanent_delegate, default_account_frozen and pausable are read from the mint's own Token-2022 extensions (signal token_extensions): a permanent delegate, new token accounts that start frozen, and a pause authority or transfers already paused. RugCheck's permanent-control finding stands in only when the extensions could not be read. A transfer hook is a red flag on the same signal but never a hard flag. top_holder_majority is the largest single token account over 50% after custody exclusions, from ZendIQ's own holder read only. bundled_launch_confirmed is 5 or more transactions in the creation slot, not the 3–4 'possible bundle' tier." },
                       "factors": { "type": "array", "items": { "$ref": "#/components/schemas/ComponentFactor" } }
                     }
                   },
