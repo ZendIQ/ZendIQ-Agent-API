@@ -2,8 +2,57 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const {
+  pipe, createTransactionMessage, setTransactionMessageFeePayer, setTransactionMessageLifetimeUsingBlockhash,
+  compileTransaction, getBase64EncodedWireTransaction, generateKeyPairSigner, blockhash,
+} = require('@solana/kit');
 const { normalise, describe } = require('./feed');
 const { RunLedger, act } = require('./watch');
+const { signAndExecute, resolveExecuteUrl } = require('./zendiq-client');
+
+const LITE_EXECUTE = 'https://lite-api.jup.ag/ultra/v1/execute';
+const V2_EXECUTE = 'https://api.jup.ag/swap/v2/execute';
+
+test('Ultra execute URL: follows a trusted submit.url, falls back only when none is named, refuses anything else', () => {
+  assert.deepEqual(resolveExecuteUrl({ submit: { url: LITE_EXECUTE } }), { url: LITE_EXECUTE });
+  assert.deepEqual(resolveExecuteUrl({ submit: { url: V2_EXECUTE } }), { url: V2_EXECUTE });
+  assert.deepEqual(resolveExecuteUrl({ requestId: 'r' }), { url: LITE_EXECUTE }, 'a response from before submit.url existed');
+  assert.equal('url' in resolveExecuteUrl({ submit: { url: 'https://evil.example/ultra/v1/execute' } }), false, 'another host');
+  assert.equal('url' in resolveExecuteUrl({ submit: { url: `${V2_EXECUTE}?to=elsewhere` } }), false, 'no query strings');
+  assert.equal('url' in resolveExecuteUrl({ submit: { url: 'https://api.jup.ag/swap/v2/order' } }), false, 'only /execute');
+  assert.equal('url' in resolveExecuteUrl({ submit: { url: 'not a url' } }), false);
+  assert.deepEqual(resolveExecuteUrl({ submit: { url: 'https://evil.example/x' } }, 'https://my.proxy/execute'), { url: 'https://my.proxy/execute' },
+    'an executeUrl the caller passes is its own choice');
+});
+
+test('signAndExecute posts a Jupiter Ultra order to submit.url, and sends nothing to an untrusted one', async () => {
+  const signer = await generateKeyPairSigner();
+  const transaction = getBase64EncodedWireTransaction(compileTransaction(pipe(
+    createTransactionMessage({ version: 0 }),
+    (m) => setTransactionMessageFeePayer(signer.address, m),
+    (m) => setTransactionMessageLifetimeUsingBlockhash({ blockhash: blockhash('11111111111111111111111111111111'), lastValidBlockHeight: 1n }, m),
+  )));
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), body: JSON.parse(init.body) });
+    return { ok: true, json: async () => ({ status: 'Success', signature: 'sig', code: 0 }) };
+  };
+  try {
+    for (const url of [V2_EXECUTE, LITE_EXECUTE]) {
+      const r = await signAndExecute({ order: { transaction, requestId: 'req-1', submit: { method: 'jupiter_ultra_execute', url, requestId: 'req-1' } }, signer });
+      assert.equal(r.ok, true);
+      assert.equal(calls.at(-1).url, url, 'the gateway that issued the order');
+      assert.equal(calls.at(-1).body.requestId, 'req-1');
+    }
+    const before = calls.length;
+    const refused = await signAndExecute({ order: { transaction, requestId: 'req-1', submit: { method: 'jupiter_ultra_execute', url: 'https://evil.example/execute' } }, signer });
+    assert.equal(refused.status, 'Refused');
+    assert.equal(calls.length, before, 'signed bytes never left for an untrusted URL');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
 
 test('feed accepts Solana boosts and discards unrelated chains', () => {
   assert.equal(normalise({ chainId: 'ethereum', tokenAddress: 'token' }), null);

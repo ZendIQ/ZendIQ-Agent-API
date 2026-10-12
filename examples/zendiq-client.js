@@ -31,6 +31,38 @@ const USDC_DECIMALS = 6;
 
 /** ZendIQ's bundle submit endpoint (OPS-322); signed bundle transactions go nowhere else. */
 const BUNDLE_SUBMIT_PATH = '/v1/agent/bundle';
+// Jupiter /execute endpoints a response may name in submit.url; a response must not be able to send
+// signed bytes anywhere else. Executable Ultra orders are issued on lite-api today and move to
+// api.jup.ag/swap/v2 later (OPS-371), so both are trusted ahead of that switch.
+const JUPITER_EXECUTE_URLS = new Set([
+  'https://lite-api.jup.ag/ultra/v1/execute',
+  'https://api.jup.ag/swap/v2/execute',
+]);
+// Responses from before submit.url existed name no URL; this is where their orders were issued.
+const LEGACY_EXECUTE_URL = 'https://lite-api.jup.ag/ultra/v1/execute';
+
+/**
+ * Where to POST a signed Jupiter Ultra order: the caller's override, else the response's
+ * `submit.url` when it is a trusted Jupiter /execute endpoint. An order can only be executed on
+ * the gateway that issued it (OPS-400), so the URL must come from the response, not a constant.
+ *
+ * @param {object} order - The /optimize response.
+ * @param {string|null} override - `executeUrl` passed by the caller, trusted as-is.
+ * @returns {{url: string}|{error: string}} Target, or why it was refused.
+ */
+function resolveExecuteUrl(order, override = null) {
+  if (override) return { url: override };
+  const named = order.submit?.url;
+  if (named == null) return { url: LEGACY_EXECUTE_URL };
+  let canonical = null;
+  try {
+    const u = new URL(String(named));
+    if (!u.search && !u.hash) canonical = `${u.origin}${u.pathname}`;
+  } catch { /* refused below */ }
+  return canonical && JUPITER_EXECUTE_URLS.has(canonical)
+    ? { url: canonical }
+    : { error: `submit.url "${named}" is not a Jupiter /execute endpoint this client trusts` };
+}
 
 /** Devnet only: a run with no ceiling still goes through the one payment path below. */
 const NO_LEDGER = Object.freeze({ reserve: () => null, settle() {}, release() {} });
@@ -469,7 +501,8 @@ async function retryPendingOnce(response, resend, delayMs) {
  * Uses partiallySignTransaction because JupiterZ (RFQ) routes require a market-maker
  * co-signature that /execute adds — a fully-signed tx would be rejected on those routes.
  *
- * @param {object} params - { order, signer, executeUrl, rpcUrl }.
+ * @param {object} params - { order, signer, executeUrl, rpcUrl }. `executeUrl` overrides the
+ *   response's `submit.url` for Jupiter Ultra; leave it unset to follow the response.
  * @returns {Promise<{ok: boolean, status: string, code?: number, signature: string|null, error: string|null}>} Result.
  */
 /**
@@ -513,7 +546,7 @@ async function confirmSignature(rpcUrl, signature, { timeoutMs = 45_000, interva
 async function signAndExecute({
   order,
   signer,
-  executeUrl = 'https://lite-api.jup.ag/ultra/v1/execute',
+  executeUrl = null,
   rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
   apiBaseUrl = 'https://api.zendiq.ai',
   onEvent = () => {},
@@ -590,8 +623,11 @@ async function signAndExecute({
     return { ok: false, status: 'Refused', signature: null, error: `unsupported submit.method "${method}" — update the client` };
   }
 
+  const target = resolveExecuteUrl(order, executeUrl);
+  if (target.error) return { ok: false, status: 'Refused', signature: null, error: target.error };
+
   await onEvent('executing', { submitMethod: method });
-  const res = await fetch(executeUrl, {
+  const res = await fetch(target.url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ signedTransaction, requestId: order.requestId }),
@@ -606,4 +642,4 @@ async function signAndExecute({
   };
 }
 
-module.exports = { ZendIQClient, decodeHeader, signAndExecute, resolveNetwork };
+module.exports = { ZendIQClient, decodeHeader, signAndExecute, resolveNetwork, resolveExecuteUrl };

@@ -278,7 +278,7 @@
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
       "TakerInsufficientBalance": {
-        "description": "Error code `taker_insufficient_balance` or `not_a_mint`; you were not charged for either. `not_a_mint`: `inputMint` or `outputMint` is not a token mint (see the NotAMint response). `taker_insufficient_balance`: No transaction is returned, and you were not charged. The `taker` cannot fund the trade: `need` is `input_token` when it does not hold the input amount (checked before anything is quoted or built), or `sol_for_fees` when it cannot pay for the transaction it would sign (base fee, priority fee and Jito tip in the bytes, plus rent for token accounts the swap opens). A transaction whose fee payer is not the taker (a gasless Ultra fill) is exempt, and another venue that can fill gaslessly is tried before refusing. The body names the token, the amount required and held, and the shortfall. Balances are read from the taker's associated token accounts. SOL requirements are lower bounds, and when the balances cannot be read the check is skipped and the build proceeds.",
+        "description": "Error code `taker_insufficient_balance` or `not_a_mint`; you were not charged for either. `not_a_mint`: `inputMint` or `outputMint` is not a token mint (see the NotAMint response). `taker_insufficient_balance`: No transaction is returned, and you were not charged. The `taker` cannot fund the trade: `need` is `input_token` when it does not hold the input amount (checked before anything is quoted or built), or `sol_for_fees` when it cannot pay for the transaction it would sign (base fee, priority fee and Jito tip in the bytes, plus rent for token accounts the swap opens). A transaction whose fee payer is not the taker (a gasless Ultra fill) is exempt, and another venue that can fill gaslessly is tried before refusing. The body names the token, the amount required and held, and the shortfall. Balances are read from the taker's associated token accounts. SOL requirements are lower bounds, and when the balances cannot be read the check is skipped and the build proceeds. If no venue builds and Jupiter itself reports the shortfall (`/order` errorCode 1 or 2 from an aggregator router), the error has `source: \"jupiter_order\"` and a `jupiter` object; amounts ZendIQ could not read are null rather than estimated.",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
       "NotAMint": {
@@ -932,7 +932,7 @@
                     "enum": ["jupiter_ultra_execute", "rpc_send_transaction", "jito_bundle"]
                   },
                   "path": { "type": "string", "description": "Present on jito_bundle.", "examples": ["/v1/agent/bundle"] },
-                  "url": { "type": "string", "description": "Present on jupiter_ultra_execute.", "examples": ["https://lite-api.jup.ag/ultra/v1/execute"] },
+                  "url": { "type": "string", "description": "Present on jupiter_ultra_execute. POST `{ signedTransaction, requestId }` to exactly this URL. An Ultra order can only be executed on the Jupiter gateway that issued it, so take the URL from each response rather than hard-coding one; the host is expected to move from lite-api.jup.ag/ultra/v1 to api.jup.ag/swap/v2.", "examples": ["https://lite-api.jup.ag/ultra/v1/execute"] },
                   "requestId": { "type": ["string", "null"] },
                   "body": { "type": "string", "description": "Present on jupiter_ultra_execute.", "examples": ["{ signedTransaction, requestId }"] },
                   "lastValidBlockHeight": { "type": ["integer", "null"], "description": "Present on rpc_send_transaction and jito_bundle. Null when the venue embedded a blockhash whose remaining validity is unknown — send promptly." },
@@ -1137,9 +1137,19 @@
           "required": { "type": ["string", "null"], "description": "Present on taker_insufficient_balance: amount needed, in whole tokens as a decimal string. Null when the mint's decimals could not be read; use requiredAtomic." },
           "held": { "type": ["string", "null"], "description": "Present on taker_insufficient_balance: amount the taker holds, in whole tokens." },
           "shortfall": { "type": ["string", "null"], "description": "Present on taker_insufficient_balance: required minus held, in whole tokens." },
-          "requiredAtomic": { "type": "string", "description": "Present on taker_insufficient_balance: required, in atomic units." },
-          "heldAtomic": { "type": "string", "description": "Present on taker_insufficient_balance: held, in atomic units." },
-          "shortfallAtomic": { "type": "string", "description": "Present on taker_insufficient_balance: shortfall, in atomic units." }
+          "requiredAtomic": { "type": ["string", "null"], "description": "Present on taker_insufficient_balance: required, in atomic units. Null only with source jupiter_order on sol_for_fees, where Jupiter does not report its requirement." },
+          "heldAtomic": { "type": ["string", "null"], "description": "Present on taker_insufficient_balance: held, in atomic units. Null only with source jupiter_order when ZendIQ could not read the balance." },
+          "shortfallAtomic": { "type": ["string", "null"], "description": "Present on taker_insufficient_balance: shortfall, in atomic units. Null only with source jupiter_order when required or held is unknown." },
+          "source": { "type": "string", "enum": ["chain", "jupiter_order"], "description": "Present on taker_insufficient_balance: chain = ZendIQ read the balances and computed the shortfall; jupiter_order = Jupiter's /order reported it and no venue could build." },
+          "jupiter": {
+            "type": "object",
+            "description": "Present when source is jupiter_order: what Jupiter's /order returned.",
+            "properties": {
+              "router": { "type": ["string", "null"], "examples": ["metis"] },
+              "errorCode": { "type": ["integer", "null"], "examples": [1] },
+              "errorMessage": { "type": ["string", "null"], "examples": ["Insufficient funds"] }
+            }
+          }
         }
       },
       "AnalysisId": {
