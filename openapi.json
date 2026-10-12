@@ -110,7 +110,8 @@
           "422": { "$ref": "#/components/responses/NotAMint" },
           "429": { "$ref": "#/components/responses/RateLimited" },
           "500": { "$ref": "#/components/responses/InternalError" },
-          "502": { "$ref": "#/components/responses/AnalysisUnavailable" }
+          "502": { "$ref": "#/components/responses/AnalysisUnavailable" },
+          "503": { "$ref": "#/components/responses/ScreeningUnavailable" }
         }
       }
     },
@@ -144,7 +145,8 @@
           "422": { "$ref": "#/components/responses/TakerInsufficientBalance" },
           "429": { "$ref": "#/components/responses/RateLimited" },
           "500": { "$ref": "#/components/responses/InternalError" },
-          "502": { "$ref": "#/components/responses/OptimizeUnavailable" }
+          "502": { "$ref": "#/components/responses/OptimizeUnavailable" },
+          "503": { "$ref": "#/components/responses/ScreeningUnavailable" }
         }
       }
     },
@@ -261,6 +263,11 @@
         "description": "Rate limited on the free screen endpoint, which has its own per-IP limit (240 per minute by default). Back off for Retry-After seconds and retry.",
         "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RateLimitError" } } }
+      },
+      "ScreeningUnavailable": {
+        "description": "Paid calls are paused because the OFAC SDN list every paying wallet is screened against is unavailable: it never loaded, or it is older than its maximum age (see `sanctionsScreening` on GET /v1/agent). Returned before the 402, so no payment is requested; an authorization presented now is not consumed. Retry after Retry-After seconds. A payment whose screening lapses between the 402 and settlement is refused with a 402 whose PAYMENT-RESPONSE carries errorReason `screening_unavailable`, and is not charged.",
+        "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ScreeningUnavailableError" } } }
       },
       "AuthorizationAlreadyUsed": {
         "description": "This payment authorization was already presented and has not settled into a result that can be replayed. Read `priorOutcome`: `in_flight` means retry shortly with the same authorization; any other value means request a fresh 402 challenge — except `settle_threw` and `settle_unknown`, where the transfer may have landed and paying again could double-charge; check it on chain first. A replay of an authorization that did settle is not a 409: it returns the original 200 body with `replayed: true`. A retry of a `settlement_pending` payment is answered by redemption instead: `already_served` (redeemed once already), `redemption_in_progress`, `redemption_route_mismatch` (only the route it paid for), `redemption_amount_mismatch`, `redemption_expired` (after 24 h; email support@zendiq.ai with the `settlement` signature for a refund) or `settlement_unresolved` (not yet known; do not pay again). Those carry `charged` and `settlement`.",
@@ -1092,6 +1099,19 @@
               "error": { "type": ["string", "null"] }
             }
           },
+          "sanctionsScreening": {
+            "type": "object",
+            "description": "State of the OFAC SDN list every paying wallet is screened against before settlement. While available is false, paid endpoints answer 503 screening_unavailable before any payment is requested.",
+            "properties": {
+              "list": { "type": "string", "examples": ["OFAC SDN (digital-currency addresses)"] },
+              "available": { "type": "boolean" },
+              "reason": { "type": ["string", "null"], "enum": ["never_loaded", "too_old", null] },
+              "publishDate": { "type": ["string", "null"], "description": "OFAC's publish date of the list in use, as OFAC writes it (MM/DD/YYYY)." },
+              "fetchedAt": { "type": ["string", "null"], "format": "date-time", "description": "When ZendIQ last downloaded the list successfully." },
+              "ageHours": { "type": ["integer", "null"], "description": "Hours since fetchedAt." },
+              "maxAgeHours": { "type": "integer", "description": "Past this age the list is treated as unavailable." }
+            }
+          },
           "custody": { "type": "string" }
         }
       },
@@ -1138,6 +1158,15 @@
           "error": { "const": "rate_limited" },
           "limit": { "type": "string", "enum": ["ip", "payer"] },
           "retryAfterSeconds": { "type": "integer" },
+          "message": { "type": "string" }
+        }
+      },
+      "ScreeningUnavailableError": {
+        "type": "object",
+        "properties": {
+          "error": { "const": "screening_unavailable" },
+          "charged": { "const": false },
+          "reason": { "type": "string", "enum": ["never_loaded", "too_old"] },
           "message": { "type": "string" }
         }
       },
